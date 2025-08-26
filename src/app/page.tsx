@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { SidebarProvider, Sidebar, SidebarInset, SidebarHeader, SidebarTrigger, SidebarContent, SidebarMenu, SidebarMenuItem, SidebarMenuButton, SidebarFooter } from '@/components/ui/sidebar';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { Card, CardContent } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Paperclip, Send, RefreshCw, Users, User, LogOut, Phone, PhoneOff, Mic, MicOff, Copy, Edit, MessageSquare, Contact } from 'lucide-react';
@@ -13,7 +13,7 @@ import { generateContactCode } from '@/ai/flows/user-codes';
 import { generateLoginCode } from '@/ai/flows/user-login-code';
 import { useToast } from '@/hooks/use-toast';
 import { db, auth } from '@/lib/firebase';
-import { signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+import { signInAnonymously, onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
 import { collection, addDoc, query, orderBy, onSnapshot, serverTimestamp, Timestamp, doc, setDoc, getDoc, updateDoc, where, getDocs, DocumentData, writeBatch } from 'firebase/firestore';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from "@/components/ui/checkbox"
@@ -143,7 +143,12 @@ export default function ChatPage() {
     return newCode;
   }
   
-  const initializeUser = useCallback(async (userId: string) => {
+  const initializeUser = useCallback(async (firebaseUser: FirebaseUser) => {
+    const userId = localStorage.getItem('currentUserId') || firebaseUser.uid;
+    if(userId !== firebaseUser.uid) {
+        localStorage.setItem('currentUserId', firebaseUser.uid);
+    }
+
     const userDocRef = doc(db, 'users', userId);
     let docSnap = await getDoc(userDocRef);
 
@@ -177,9 +182,10 @@ export default function ChatPage() {
         }
     }
 
-    localStorage.setItem('currentUserId', userId);
+    setCurrentUser(user);
     setEditProfileName(user.name);
     setEditProfileAvatar(user.avatar);
+    setLoading(false);
     return user;
   }, [toast]);
 
@@ -198,13 +204,7 @@ export default function ChatPage() {
            return;
         }
       }
-
-      const userId = localStorage.getItem('currentUserId') || user.uid;
-      const userData = await initializeUser(userId);
-      if (userData) {
-          setCurrentUser(userData);
-      }
-      setLoading(false);
+      await initializeUser(user);
     });
 
     return () => authUnsubscribe();
@@ -339,7 +339,7 @@ export default function ChatPage() {
              await batch.commit();
           }
       }
-  }, [selectedConversation, currentUser]);
+  }, [selectedConversation]);
   
   useEffect(() => {
     if (!selectedConversation || !currentUser) return;
@@ -437,7 +437,7 @@ export default function ChatPage() {
         });
       }
     } catch (error) {
-        console.error('Error triaging notification:', error);
+      console.error('Error triaging notification:', error);
     }
   };
 
@@ -856,7 +856,7 @@ export default function ChatPage() {
 
     if (callStatus === 'ringing' && !isInitiator) {
         title = `Incoming Call from ${selectedConversation.name}`;
-        content = <p>Do you want to accept the call?</p>;
+        content = <AlertDialogDescription>Do you want to accept the call?</AlertDialogDescription>;
         actions = (
             <>
                 <Button onClick={handleAnswerCall} className="bg-green-600 hover:bg-green-700">
@@ -871,12 +871,12 @@ export default function ChatPage() {
         )
     } else if (callStatus === 'ringing' && isInitiator) {
         title = `Calling ${selectedConversation.name}...`;
-        content = <p>Waiting for them to answer.</p>
+        content = <AlertDialogDescription>Waiting for them to answer.</AlertDialogDescription>
     } else if (callStatus === 'connected') {
         title = `On call with ${selectedConversation.name}`;
         content = (
             <div className="flex items-center justify-center gap-4">
-                <p>Call is active.</p>
+                <AlertDialogDescription>Call is active.</AlertDialogDescription>
                 <Button variant="outline" size="icon" onClick={handleToggleMute}>
                    {isMuted ? <MicOff className="h-4 w-4"/> : <Mic className="h-4 w-4"/>}
                 </Button>
@@ -891,7 +891,7 @@ export default function ChatPage() {
                 <AlertDialogHeader>
                     <AlertDialogTitle className="text-center">{title}</AlertDialogTitle>
                 </AlertDialogHeader>
-                <div className="text-center my-4 text-muted-foreground">
+                <div className="text-center my-4">
                     {content}
                 </div>
                 <AlertDialogFooter className="sm:justify-center">
@@ -1053,130 +1053,132 @@ export default function ChatPage() {
     <SidebarProvider>
       <div className="flex min-h-screen bg-background">
         <Sidebar>
-          <SidebarHeader>
-             <div className="flex items-center gap-2">
-                <Avatar className="h-8 w-8">
-                  <AvatarImage src={currentUser?.avatar} alt={currentUser?.name} data-ai-hint="female person" />
-                  <AvatarFallback>{currentUser?.name?.charAt(0)}</AvatarFallback>
-                </Avatar>
-                <div className="flex flex-col overflow-hidden">
-                  <span className="text-sm font-semibold text-foreground truncate">{currentUser?.name}</span>
-                </div>
-              </div>
-          </SidebarHeader>
-          <SidebarContent>
-            <SidebarMenu>
-                <SidebarMenuItem>
-                    <SidebarMenuButton 
-                        tooltip="Chats" 
-                        isActive={activeView === 'chats'}
-                        onClick={() => setActiveView('chats')}
-                    >
-                        <MessageSquare />
-                        <span>Chats</span>
-                    </SidebarMenuButton>
-                </SidebarMenuItem>
-                 <SidebarMenuItem>
-                    <SidebarMenuButton 
-                        tooltip="Contacts" 
-                        isActive={activeView === 'contacts'}
-                        onClick={() => setActiveView('contacts')}
-                    >
-                        <Contact />
-                        <span>Contacts</span>
-                    </SidebarMenuButton>
-                </SidebarMenuItem>
-                <SidebarMenuItem>
-                    <SidebarMenuButton 
-                        tooltip="Profile" 
-                        isActive={activeView === 'profile'}
-                        onClick={() => setActiveView('profile')}
-                    >
-                        <User />
-                        <span>Profile</span>
-                    </SidebarMenuButton>
-                </SidebarMenuItem>
-            </SidebarMenu>
-          </SidebarContent>
-            <SidebarFooter>
-               <Dialog open={isAddContactOpen} onOpenChange={setAddContactOpen}>
-                  <DialogTrigger asChild>
-                    <Button variant="outline" className="w-full">
-                      <User className="mr-2 h-4 w-4" />
-                      Add Contact
-                    </Button>
-                  </DialogTrigger>
-                  <DialogContent>
-                    <DialogHeader>
-                      <DialogTitle>Add a new contact</DialogTitle>
-                      <DialogDescription>
-                        Enter the unique code of the person you want to chat with.
-                      </DialogDescription>
-                    </DialogHeader>
-                    <div className="grid gap-4 py-4">
-                      <Label htmlFor="contact-code">Contact Code</Label>
-                      <Input
-                        id="contact-code"
-                        value={addContactCode}
-                        onChange={(e) => setAddContactCode(e.target.value)}
-                        placeholder="e.g. blue-tree-123"
-                      />
+            <div className="flex h-full flex-col">
+                <SidebarHeader>
+                    <div className="flex items-center gap-2">
+                        <Avatar className="h-8 w-8">
+                        <AvatarImage src={currentUser?.avatar} alt={currentUser?.name} data-ai-hint="female person" />
+                        <AvatarFallback>{currentUser?.name?.charAt(0)}</AvatarFallback>
+                        </Avatar>
+                        <div className="flex flex-col overflow-hidden">
+                        <span className="text-sm font-semibold text-foreground truncate">{currentUser?.name}</span>
+                        </div>
                     </div>
-                    <DialogFooter>
-                      <Button onClick={handleAddContact}>Add Contact</Button>
-                    </DialogFooter>
-                  </DialogContent>
-                </Dialog>
-                <Dialog open={isCreateGroupOpen} onOpenChange={setCreateGroupOpen}>
-                  <DialogTrigger asChild>
-                    <Button variant="outline" className="w-full">
-                      <Users className="mr-2 h-4 w-4" />
-                      New Group
-                    </Button>
-                  </DialogTrigger>
-                  <DialogContent>
-                    <DialogHeader>
-                      <DialogTitle>Create a new group</DialogTitle>
-                      <DialogDescription>
-                        Give your group a name and add members from your contact list.
-                      </DialogDescription>
-                    </DialogHeader>
-                    <div className="grid gap-4 py-4">
-                      <Label htmlFor="group-name">Group Name</Label>
-                      <Input
-                        id="group-name"
-                        value={groupName}
-                        onChange={(e) => setGroupName(e.target.value)}
-                        placeholder="e.g. My Awesome Team"
-                      />
-                      <Label>Members</Label>
-                       <ScrollArea className="h-40">
-                         <div className="space-y-2">
-                          {currentUser?.contacts.map(contact => (
-                              <div key={contact.id} className="flex items-center space-x-2">
-                                <Checkbox 
-                                  id={`member-${contact.id}`} 
-                                  onCheckedChange={() => handleGroupMemberToggle(contact.id)}
-                                  checked={groupMembers.includes(contact.id)}
-                                />
-                                <Label htmlFor={`member-${contact.id}`} className="font-normal flex items-center gap-2">
-                                    <Avatar className="h-6 w-6">
-                                        <AvatarImage src={contact.avatar} alt={contact.name} data-ai-hint="person" />
-                                        <AvatarFallback>{contact.name.charAt(0)}</AvatarFallback>
-                                    </Avatar>
-                                    {contact.name}
-                                </Label>
-                              </div>
-                          ))}
-                         </div>
-                       </ScrollArea>
-                    </div>
-                    <DialogFooter>
-                      <Button onClick={handleCreateGroup}>Create Group</Button>
-                    </DialogFooter>
-                  </DialogContent>
-                </Dialog>
-            </SidebarFooter>
+                </SidebarHeader>
+                <SidebarContent>
+                    <SidebarMenu>
+                        <SidebarMenuItem>
+                            <SidebarMenuButton 
+                                tooltip="Chats" 
+                                isActive={activeView === 'chats'}
+                                onClick={() => setActiveView('chats')}
+                            >
+                                <MessageSquare />
+                                <span>Chats</span>
+                            </SidebarMenuButton>
+                        </SidebarMenuItem>
+                        <SidebarMenuItem>
+                            <SidebarMenuButton 
+                                tooltip="Contacts" 
+                                isActive={activeView === 'contacts'}
+                                onClick={() => setActiveView('contacts')}
+                            >
+                                <Contact />
+                                <span>Contacts</span>
+                            </SidebarMenuButton>
+                        </SidebarMenuItem>
+                        <SidebarMenuItem>
+                            <SidebarMenuButton 
+                                tooltip="Profile" 
+                                isActive={activeView === 'profile'}
+                                onClick={() => setActiveView('profile')}
+                            >
+                                <User />
+                                <span>Profile</span>
+                            </SidebarMenuButton>
+                        </SidebarMenuItem>
+                    </SidebarMenu>
+                </SidebarContent>
+                <SidebarFooter>
+                <Dialog open={isAddContactOpen} onOpenChange={setAddContactOpen}>
+                    <DialogTrigger asChild>
+                        <Button variant="outline" className="w-full">
+                        <User className="mr-2 h-4 w-4" />
+                        Add Contact
+                        </Button>
+                    </DialogTrigger>
+                    <DialogContent>
+                        <DialogHeader>
+                        <DialogTitle>Add a new contact</DialogTitle>
+                        <DialogDescription>
+                            Enter the unique code of the person you want to chat with.
+                        </DialogDescription>
+                        </DialogHeader>
+                        <div className="grid gap-4 py-4">
+                        <Label htmlFor="contact-code">Contact Code</Label>
+                        <Input
+                            id="contact-code"
+                            value={addContactCode}
+                            onChange={(e) => setAddContactCode(e.target.value)}
+                            placeholder="e.g. blue-tree-123"
+                        />
+                        </div>
+                        <DialogFooter>
+                        <Button onClick={handleAddContact}>Add Contact</Button>
+                        </DialogFooter>
+                    </DialogContent>
+                    </Dialog>
+                    <Dialog open={isCreateGroupOpen} onOpenChange={setCreateGroupOpen}>
+                    <DialogTrigger asChild>
+                        <Button variant="outline" className="w-full">
+                        <Users className="mr-2 h-4 w-4" />
+                        New Group
+                        </Button>
+                    </DialogTrigger>
+                    <DialogContent>
+                        <DialogHeader>
+                        <DialogTitle>Create a new group</DialogTitle>
+                        <DialogDescription>
+                            Give your group a name and add members from your contact list.
+                        </DialogDescription>
+                        </DialogHeader>
+                        <div className="grid gap-4 py-4">
+                        <Label htmlFor="group-name">Group Name</Label>
+                        <Input
+                            id="group-name"
+                            value={groupName}
+                            onChange={(e) => setGroupName(e.target.value)}
+                            placeholder="e.g. My Awesome Team"
+                        />
+                        <Label>Members</Label>
+                        <ScrollArea className="h-40">
+                            <div className="space-y-2">
+                            {currentUser?.contacts.map(contact => (
+                                <div key={contact.id} className="flex items-center space-x-2">
+                                    <Checkbox 
+                                    id={`member-${contact.id}`} 
+                                    onCheckedChange={() => handleGroupMemberToggle(contact.id)}
+                                    checked={groupMembers.includes(contact.id)}
+                                    />
+                                    <Label htmlFor={`member-${contact.id}`} className="font-normal flex items-center gap-2">
+                                        <Avatar className="h-6 w-6">
+                                            <AvatarImage src={contact.avatar} alt={contact.name} data-ai-hint="person" />
+                                            <AvatarFallback>{contact.name.charAt(0)}</AvatarFallback>
+                                        </Avatar>
+                                        {contact.name}
+                                    </Label>
+                                </div>
+                            ))}
+                            </div>
+                        </ScrollArea>
+                        </div>
+                        <DialogFooter>
+                        <Button onClick={handleCreateGroup}>Create Group</Button>
+                        </DialogFooter>
+                    </DialogContent>
+                    </Dialog>
+                </SidebarFooter>
+            </div>
         </Sidebar>
         <SidebarInset className="flex flex-col">
           {activeView === 'chats' && (

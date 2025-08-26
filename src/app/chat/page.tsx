@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { SidebarProvider, Sidebar, SidebarInset, SidebarHeader, SidebarTrigger, SidebarContent, SidebarMenu, SidebarMenuItem, SidebarMenuButton, SidebarFooter } from '@/components/ui/sidebar';
+import { SidebarProvider, Sidebar, SidebarInset, SidebarHeader, SidebarTrigger, SidebarContent, SidebarMenu, SidebarMenuItem, SidebarMenuButton, SidebarFooter, useSidebar } from '@/components/ui/sidebar';
+import { SheetTitle } from '@/components/ui/sheet';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -13,7 +14,7 @@ import { generateContactCode } from '@/ai/flows/user-codes';
 import { generateLoginCode } from '@/ai/flows/user-login-code';
 import { useToast } from '@/hooks/use-toast';
 import { db, auth } from '@/lib/firebase';
-import { signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+import { signInAnonymously, onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
 import { collection, addDoc, query, orderBy, onSnapshot, serverTimestamp, Timestamp, doc, setDoc, getDoc, updateDoc, where, getDocs, DocumentData, writeBatch } from 'firebase/firestore';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from "@/components/ui/checkbox"
@@ -72,8 +73,8 @@ type CallState = {
 
 type ActiveView = 'chats' | 'contacts' | 'profile';
 
-
-export default function ChatPage() {
+function ChatLayout() {
+  const { isMobile } = useSidebar();
   const [currentUser, setCurrentUser] = useState<UserData | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -143,7 +144,12 @@ export default function ChatPage() {
     return newCode;
   }
   
-  const initializeUser = useCallback(async (userId: string) => {
+  const initializeUser = useCallback(async (firebaseUser: FirebaseUser) => {
+    const userId = localStorage.getItem('currentUserId') || firebaseUser.uid;
+    if(userId !== firebaseUser.uid) {
+        localStorage.setItem('currentUserId', firebaseUser.uid);
+    }
+
     const userDocRef = doc(db, 'users', userId);
     let docSnap = await getDoc(userDocRef);
 
@@ -177,9 +183,10 @@ export default function ChatPage() {
         }
     }
 
-    localStorage.setItem('currentUserId', userId);
+    setCurrentUser(user);
     setEditProfileName(user.name);
     setEditProfileAvatar(user.avatar);
+    setLoading(false);
     return user;
   }, [toast]);
 
@@ -198,13 +205,7 @@ export default function ChatPage() {
            return;
         }
       }
-
-      const userId = localStorage.getItem('currentUserId') || user.uid;
-      const userData = await initializeUser(userId);
-      if (userData) {
-          setCurrentUser(userData);
-      }
-      setLoading(false);
+      await initializeUser(user);
     });
 
     return () => authUnsubscribe();
@@ -1050,250 +1051,259 @@ export default function ChatPage() {
   );
 
   return (
-    <SidebarProvider>
-      <div className="flex min-h-screen bg-background">
-        <Sidebar>
-          <SidebarHeader>
-             <div className="flex items-center gap-2">
-                <Avatar className="h-8 w-8">
-                  <AvatarImage src={currentUser?.avatar} alt={currentUser?.name} data-ai-hint="female person" />
-                  <AvatarFallback>{currentUser?.name?.charAt(0)}</AvatarFallback>
-                </Avatar>
-                <div className="flex flex-col overflow-hidden">
-                  <span className="text-sm font-semibold text-foreground truncate">{currentUser?.name}</span>
-                </div>
-              </div>
-          </SidebarHeader>
-          <SidebarContent>
-            <SidebarMenu>
-                <SidebarMenuItem>
-                    <SidebarMenuButton 
-                        tooltip="Chats" 
-                        isActive={activeView === 'chats'}
-                        onClick={() => setActiveView('chats')}
-                    >
-                        <MessageSquare />
-                        <span>Chats</span>
-                    </SidebarMenuButton>
-                </SidebarMenuItem>
-                 <SidebarMenuItem>
-                    <SidebarMenuButton 
-                        tooltip="Contacts" 
-                        isActive={activeView === 'contacts'}
-                        onClick={() => setActiveView('contacts')}
-                    >
-                        <Contact />
-                        <span>Contacts</span>
-                    </SidebarMenuButton>
-                </SidebarMenuItem>
-                <SidebarMenuItem>
-                    <SidebarMenuButton 
-                        tooltip="Profile" 
-                        isActive={activeView === 'profile'}
-                        onClick={() => setActiveView('profile')}
-                    >
-                        <User />
-                        <span>Profile</span>
-                    </SidebarMenuButton>
-                </SidebarMenuItem>
-            </SidebarMenu>
-          </SidebarContent>
-            <SidebarFooter>
-               <Dialog open={isAddContactOpen} onOpenChange={setAddContactOpen}>
+    <div className="flex min-h-screen bg-background">
+      <Sidebar>
+        <SheetTitle className="sr-only">Main Navigation</SheetTitle>
+          <div className="flex h-full flex-col">
+              <SidebarHeader>
+                  <div className="flex items-center gap-2">
+                      <Avatar className="h-8 w-8">
+                      <AvatarImage src={currentUser?.avatar} alt={currentUser?.name} data-ai-hint="female person" />
+                      <AvatarFallback>{currentUser?.name?.charAt(0)}</AvatarFallback>
+                      </Avatar>
+                      <div className="flex flex-col overflow-hidden">
+                      <span className="text-sm font-semibold text-foreground truncate">{currentUser?.name}</span>
+                      </div>
+                  </div>
+              </SidebarHeader>
+              <SidebarContent>
+                  <SidebarMenu>
+                      <SidebarMenuItem>
+                          <SidebarMenuButton 
+                              tooltip="Chats" 
+                              isActive={activeView === 'chats'}
+                              onClick={() => setActiveView('chats')}
+                          >
+                              <MessageSquare />
+                              <span>Chats</span>
+                          </SidebarMenuButton>
+                      </SidebarMenuItem>
+                      <SidebarMenuItem>
+                          <SidebarMenuButton 
+                              tooltip="Contacts" 
+                              isActive={activeView === 'contacts'}
+                              onClick={() => setActiveView('contacts')}
+                          >
+                              <Contact />
+                              <span>Contacts</span>
+                          </SidebarMenuButton>
+                      </SidebarMenuItem>
+                      <SidebarMenuItem>
+                          <SidebarMenuButton 
+                              tooltip="Profile" 
+                              isActive={activeView === 'profile'}
+                              onClick={() => setActiveView('profile')}
+                          >
+                              <User />
+                              <span>Profile</span>
+                          </SidebarMenuButton>
+                      </SidebarMenuItem>
+                  </SidebarMenu>
+              </SidebarContent>
+              <SidebarFooter>
+              <Dialog open={isAddContactOpen} onOpenChange={setAddContactOpen}>
                   <DialogTrigger asChild>
-                    <Button variant="outline" className="w-full">
+                      <Button variant="outline" className="w-full">
                       <User className="mr-2 h-4 w-4" />
                       Add Contact
-                    </Button>
+                      </Button>
                   </DialogTrigger>
                   <DialogContent>
-                    <DialogHeader>
+                      <DialogHeader>
                       <DialogTitle>Add a new contact</DialogTitle>
                       <DialogDescription>
-                        Enter the unique code of the person you want to chat with.
+                          Enter the unique code of the person you want to chat with.
                       </DialogDescription>
-                    </DialogHeader>
-                    <div className="grid gap-4 py-4">
+                      </DialogHeader>
+                      <div className="grid gap-4 py-4">
                       <Label htmlFor="contact-code">Contact Code</Label>
                       <Input
-                        id="contact-code"
-                        value={addContactCode}
-                        onChange={(e) => setAddContactCode(e.target.value)}
-                        placeholder="e.g. blue-tree-123"
+                          id="contact-code"
+                          value={addContactCode}
+                          onChange={(e) => setAddContactCode(e.target.value)}
+                          placeholder="e.g. blue-tree-123"
                       />
-                    </div>
-                    <DialogFooter>
+                      </div>
+                      <DialogFooter>
                       <Button onClick={handleAddContact}>Add Contact</Button>
-                    </DialogFooter>
+                      </DialogFooter>
                   </DialogContent>
-                </Dialog>
-                <Dialog open={isCreateGroupOpen} onOpenChange={setCreateGroupOpen}>
+                  </Dialog>
+                  <Dialog open={isCreateGroupOpen} onOpenChange={setCreateGroupOpen}>
                   <DialogTrigger asChild>
-                    <Button variant="outline" className="w-full">
+                      <Button variant="outline" className="w-full">
                       <Users className="mr-2 h-4 w-4" />
                       New Group
-                    </Button>
+                      </Button>
                   </DialogTrigger>
                   <DialogContent>
-                    <DialogHeader>
+                      <DialogHeader>
                       <DialogTitle>Create a new group</DialogTitle>
                       <DialogDescription>
-                        Give your group a name and add members from your contact list.
+                          Give your group a name and add members from your contact list.
                       </DialogDescription>
-                    </DialogHeader>
-                    <div className="grid gap-4 py-4">
+                      </DialogHeader>
+                      <div className="grid gap-4 py-4">
                       <Label htmlFor="group-name">Group Name</Label>
                       <Input
-                        id="group-name"
-                        value={groupName}
-                        onChange={(e) => setGroupName(e.target.value)}
-                        placeholder="e.g. My Awesome Team"
+                          id="group-name"
+                          value={groupName}
+                          onChange={(e) => setGroupName(e.target.value)}
+                          placeholder="e.g. My Awesome Team"
                       />
                       <Label>Members</Label>
-                       <ScrollArea className="h-40">
-                         <div className="space-y-2">
+                      <ScrollArea className="h-40">
+                          <div className="space-y-2">
                           {currentUser?.contacts.map(contact => (
                               <div key={contact.id} className="flex items-center space-x-2">
-                                <Checkbox 
+                                  <Checkbox 
                                   id={`member-${contact.id}`} 
                                   onCheckedChange={() => handleGroupMemberToggle(contact.id)}
                                   checked={groupMembers.includes(contact.id)}
-                                />
-                                <Label htmlFor={`member-${contact.id}`} className="font-normal flex items-center gap-2">
-                                    <Avatar className="h-6 w-6">
-                                        <AvatarImage src={contact.avatar} alt={contact.name} data-ai-hint="person" />
-                                        <AvatarFallback>{contact.name.charAt(0)}</AvatarFallback>
-                                    </Avatar>
-                                    {contact.name}
-                                </Label>
+                                  />
+                                  <Label htmlFor={`member-${contact.id}`} className="font-normal flex items-center gap-2">
+                                      <Avatar className="h-6 w-6">
+                                          <AvatarImage src={contact.avatar} alt={contact.name} data-ai-hint="person" />
+                                          <AvatarFallback>{contact.name.charAt(0)}</AvatarFallback>
+                                      </Avatar>
+                                      {contact.name}
+                                  </Label>
                               </div>
                           ))}
-                         </div>
-                       </ScrollArea>
-                    </div>
-                    <DialogFooter>
+                          </div>
+                      </ScrollArea>
+                      </div>
+                      <DialogFooter>
                       <Button onClick={handleCreateGroup}>Create Group</Button>
-                    </DialogFooter>
+                      </DialogFooter>
                   </DialogContent>
-                </Dialog>
-            </SidebarFooter>
-        </Sidebar>
-        <SidebarInset className="flex flex-col">
-          {activeView === 'chats' && (
-            selectedConversation ? (
-                <>
-                  <header className="flex h-14 items-center justify-between border-b bg-background px-4">
-                    <div className="flex items-center gap-2">
-                      <SidebarTrigger className="md:hidden" />
-                      <Avatar className="h-8 w-8">
-                        <AvatarImage src={selectedConversation.avatar} alt={selectedConversation.name} data-ai-hint={selectedConversation.type === 'group' ? 'group users' : 'person'}/>
-                        <AvatarFallback>{selectedConversation.name.charAt(0)}</AvatarFallback>
-                      </Avatar>
-                      <div className="flex flex-col">
-                        <span className="font-semibold">{selectedConversation.name}</span>
-                        {selectedConversation.type === 'group' && (
-                            <span className="text-xs text-muted-foreground">{selectedConversation.members?.length} members</span>
-                        )}
-                      </div>
+                  </Dialog>
+              </SidebarFooter>
+          </div>
+      </Sidebar>
+      <SidebarInset className="flex flex-col">
+        {activeView === 'chats' && (
+          selectedConversation ? (
+              <>
+                <header className="flex h-14 items-center justify-between border-b bg-background px-4">
+                  <div className="flex items-center gap-2">
+                    <SidebarTrigger className="md:hidden" />
+                    <Avatar className="h-8 w-8">
+                      <AvatarImage src={selectedConversation.avatar} alt={selectedConversation.name} data-ai-hint={selectedConversation.type === 'group' ? 'group users' : 'person'}/>
+                      <AvatarFallback>{selectedConversation.name.charAt(0)}</AvatarFallback>
+                    </Avatar>
+                    <div className="flex flex-col">
+                      <span className="font-semibold">{selectedConversation.name}</span>
+                      {selectedConversation.type === 'group' && (
+                          <span className="text-xs text-muted-foreground">{selectedConversation.members?.length} members</span>
+                      )}
                     </div>
-                    <div>
-                       {selectedConversation.type === 'private' && (
-                        <Button variant="ghost" size="icon" onClick={handleInitiateCall} disabled={selectedConversation.call?.active && selectedConversation.call?.status !== 'ended'}>
-                            <Phone className="h-5 w-5" />
-                        </Button>
-                       )}
-                    </div>
-                  </header>
-                  <ScrollArea className="flex-1">
-                    <div className="p-4 space-y-4">
-                        {messages.map((message) => {
-                          const isUser = message.senderId === currentUser?.id;
-                          const sender = getSender(message.senderId);
-                          return (
-                            <div key={message.id} className={`flex items-end gap-3 ${isUser ? 'flex-row-reverse' : ''}`}>
-                               <Avatar className="h-8 w-8">
-                                 <AvatarImage src={sender?.avatar} alt={sender?.name} data-ai-hint="person" />
-                                <AvatarFallback>{sender?.name?.charAt(0)}</AvatarFallback>
-                              </Avatar>
-                              <div className={`flex flex-col space-y-1 ${isUser ? 'items-end' : 'items-start'}`}>
-                                {selectedConversation.type ==='group' && !isUser && (
-                                    <span className="text-xs text-muted-foreground px-3">{sender.name}</span>
-                                )}
-                                <Card className={`rounded-2xl p-3 max-w-sm md:max-w-md ${isUser ? 'bg-primary text-primary-foreground' : 'bg-muted'}`}>
-                                  <CardContent className="p-0">
-                                    <p className="text-sm">{message.text}</p>
-                                  </CardContent>
-                                </Card>
-                              </div>
-                            </div>
-                          )
-                        })}
-                    </div>
-                  </ScrollArea>
-                  <footer className="border-t bg-background p-4">
-                    <form onSubmit={handleSendMessage} className="relative">
-                      <Input
-                        placeholder="Type a message..."
-                        className="pr-24"
-                        value={newMessage}
-                        onChange={(e) => setNewMessage(e.target.value)}
-                      />
-                      <div className="absolute inset-y-0 right-0 flex items-center">
-                        <Button variant="ghost" size="icon" type="button">
-                          <Paperclip className="h-5 w-5" />
-                        </Button>
-                        <Button variant="ghost" size="icon" type="submit">
-                          <Send className="h-5 w-5" />
-                        </Button>
-                      </div>
-                    </form>
-                  </footer>
-                </>
-              ) : (
-                <>
-                 <header className="flex h-14 items-center border-b bg-background px-4">
-                    <div className="flex items-center gap-2">
-                        <SidebarTrigger className="md:hidden" />
-                        <h2 className="text-lg font-semibold">Chats</h2>
-                    </div>
+                  </div>
+                  <div>
+                     {selectedConversation.type === 'private' && (
+                      <Button variant="ghost" size="icon" onClick={handleInitiateCall} disabled={selectedConversation.call?.active && selectedConversation.call?.status !== 'ended'}>
+                          <Phone className="h-5 w-5" />
+                      </Button>
+                     )}
+                  </div>
                 </header>
                 <ScrollArea className="flex-1">
-                    {conversations.map(conv => (
-                        <div key={conv.id} onClick={() => handleConversationSelect(conv)} className="flex items-center gap-3 p-4 cursor-pointer hover:bg-muted border-b">
-                            <Avatar className="h-10 w-10">
-                                <AvatarImage src={conv.avatar} alt={conv.name} />
-                                <AvatarFallback>{conv.name.charAt(0)}</AvatarFallback>
+                  <div className="p-4 space-y-4">
+                      {messages.map((message) => {
+                        const isUser = message.senderId === currentUser?.id;
+                        const sender = getSender(message.senderId);
+                        return (
+                          <div key={message.id} className={`flex items-end gap-3 ${isUser ? 'flex-row-reverse' : ''}`}>
+                             <Avatar className="h-8 w-8">
+                               <AvatarImage src={sender?.avatar} alt={sender?.name} data-ai-hint="person" />
+                              <AvatarFallback>{sender?.name?.charAt(0)}</AvatarFallback>
                             </Avatar>
-                            <div className="flex-1">
-                                <p className="font-semibold">{conv.name}</p>
-                                <p className="text-sm text-muted-foreground truncate">
-                                    {conv.type === 'group' ? `${conv.members?.length} members` : 'Private Chat'}
-                                </p>
+                            <div className={`flex flex-col space-y-1 ${isUser ? 'items-end' : 'items-start'}`}>
+                              {selectedConversation.type ==='group' && !isUser && (
+                                  <span className="text-xs text-muted-foreground px-3">{sender.name}</span>
+                              )}
+                              <Card className={`rounded-2xl p-3 max-w-sm md:max-w-md ${isUser ? 'bg-primary text-primary-foreground' : 'bg-muted'}`}>
+                                <CardContent className="p-0">
+                                  <p className="text-sm">{message.text}</p>
+                                </CardContent>
+                              </Card>
                             </div>
-                        </div>
-                    ))}
+                          </div>
+                        )
+                      })}
+                  </div>
                 </ScrollArea>
-                </>
-              )
-            )}
-            {activeView === 'contacts' && currentUser && (
-                <ContactList 
-                    contacts={currentUser.contacts}
-                    onSelectContact={(contactId) => {
-                        const convId = [currentUser.id, contactId].sort().join('_');
-                        const conv = conversations.find(c => c.id === convId);
-                        if(conv) {
-                            handleConversationSelect(conv);
-                        }
-                    }}
-                />
-            )}
-            {activeView === 'profile' && renderProfileView()}
-        </SidebarInset>
-      </div>
+                <footer className="border-t bg-background p-4">
+                  <form onSubmit={handleSendMessage} className="relative">
+                    <Input
+                      placeholder="Type a message..."
+                      className="pr-24"
+                      value={newMessage}
+                      onChange={(e) => setNewMessage(e.target.value)}
+                    />
+                    <div className="absolute inset-y-0 right-0 flex items-center">
+                      <Button variant="ghost" size="icon" type="button">
+                        <Paperclip className="h-5 w-5" />
+                      </Button>
+                      <Button variant="ghost" size="icon" type="submit">
+                        <Send className="h-5 w-5" />
+                      </Button>
+                    </div>
+                  </form>
+                </footer>
+              </>
+            ) : (
+              <>
+               <header className="flex h-14 items-center border-b bg-background px-4">
+                  <div className="flex items-center gap-2">
+                      <SidebarTrigger className="md:hidden" />
+                      <h2 className="text-lg font-semibold">Chats</h2>
+                  </div>
+              </header>
+              <ScrollArea className="flex-1">
+                  {conversations.map(conv => (
+                      <div key={conv.id} onClick={() => handleConversationSelect(conv)} className="flex items-center gap-3 p-4 cursor-pointer hover:bg-muted border-b">
+                          <Avatar className="h-10 w-10">
+                              <AvatarImage src={conv.avatar} alt={conv.name} />
+                              <AvatarFallback>{conv.name.charAt(0)}</AvatarFallback>
+                          </Avatar>
+                          <div className="flex-1">
+                              <p className="font-semibold">{conv.name}</p>
+                              <p className="text-sm text-muted-foreground truncate">
+                                  {conv.type === 'group' ? `${conv.members?.length} members` : 'Private Chat'}
+                              </p>
+                          </div>
+                      </div>
+                  ))}
+              </ScrollArea>
+              </>
+            )
+          )}
+          {activeView === 'contacts' && currentUser && (
+              <ContactList 
+                  contacts={currentUser.contacts}
+                  onSelectContact={(contactId) => {
+                      const convId = [currentUser.id, contactId].sort().join('_');
+                      const conv = conversations.find(c => c.id === convId);
+                      if(conv) {
+                          handleConversationSelect(conv);
+                      }
+                  }}
+              />
+          )}
+          {activeView === 'profile' && renderProfileView()}
+      </SidebarInset>
       {renderCallModal()}
       {renderRegenDialog()}
       <audio ref={remoteAudioRef} autoPlay playsInline />
-    </SidebarProvider>
+    </div>
   );
+}
+
+export default function ChatPage() {
+    return (
+        <SidebarProvider>
+            <ChatLayout />
+        </SidebarProvider>
+    );
 }
