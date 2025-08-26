@@ -1,20 +1,22 @@
 "use client";
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { SidebarProvider, Sidebar, SidebarInset, SidebarHeader, SidebarTrigger, SidebarContent, SidebarMenu, SidebarMenuItem, SidebarMenuButton, SidebarFooter } from '@/components/ui/sidebar';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { MoreVertical, Paperclip, Send, Plus, RefreshCw, Users, User } from 'lucide-react';
+import { MoreVertical, Paperclip, Send, Plus, RefreshCw, Users, User, LogOut } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { triageNotification } from '@/ai/flows/notification-triage';
 import { generateContactCode } from '@/ai/flows/user-codes';
 import { useToast } from '@/hooks/use-toast';
-import { db } from '@/lib/firebase';
+import { auth, db } from '@/lib/firebase';
 import { collection, addDoc, query, orderBy, onSnapshot, serverTimestamp, Timestamp, doc, setDoc, getDoc, updateDoc, where, getDocs, DocumentData } from 'firebase/firestore';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from "@/components/ui/checkbox"
+import { onAuthStateChanged, signOut, User as FirebaseUser } from 'firebase/auth';
 import {
   Dialog,
   DialogContent,
@@ -49,20 +51,21 @@ interface Conversation {
 }
 
 interface UserData {
+    name: string;
+    avatar: string;
     contactCode: string;
     contacts: Contact[];
 }
 
-// A simple mock user ID. In a real app, this would come from an auth system.
-const CURRENT_USER_ID = "user1";
-const CURRENT_USER_NAME = "User";
-const CURRENT_USER_AVATAR = "https://picsum.photos/100/100";
-
 
 export default function ChatPage() {
+  const [user, setUser] = useState<FirebaseUser | null>(null);
+  const [userData, setUserData] = useState<UserData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const router = useRouter();
+
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState('');
-  const [userData, setUserData] = useState<UserData | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null);
 
@@ -78,72 +81,92 @@ export default function ChatPage() {
   const { toast } = useToast();
 
   useEffect(() => {
-    // Fetch or create user data
-    const userDocRef = doc(db, 'users', CURRENT_USER_ID);
-    const getUserData = async () => {
-      let docSnap = await getDoc(userDocRef);
-      if (!docSnap.exists()) {
-         // First time user, create a document and generate a code.
-        const { code } = await generateContactCode();
-        const newUser: UserData & {name: string, avatar: string} = { 
-            contactCode: code, 
-            contacts: [], 
-            name: CURRENT_USER_NAME, 
-            avatar: CURRENT_USER_AVATAR 
-        };
-        await setDoc(userDocRef, newUser);
-        docSnap = await getDoc(userDocRef); // re-fetch to get server data
-      }
-      
-      const data = docSnap.data() as UserData;
-      setUserData(data);
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      if (currentUser) {
+        setUser(currentUser);
+        // Fetch or create user data
+        const userDocRef = doc(db, 'users', currentUser.uid);
+        let docSnap = await getDoc(userDocRef);
+        if (!docSnap.exists()) {
+          // This case should ideally be handled on the login page, but as a fallback:
+          const { code } = await generateContactCode();
+          const newUser: Partial<UserData> & {name: string, avatar: string} = { 
+              name: currentUser.displayName || `Guest-${currentUser.uid.substring(0,5)}`, 
+              avatar: currentUser.photoURL || `https://picsum.photos/seed/${currentUser.uid}/100/100`,
+              contactCode: code, 
+              contacts: [], 
+          };
+          await setDoc(userDocRef, newUser);
+          docSnap = await getDoc(userDocRef); // re-fetch to get server data
+        }
+        
+        const data = docSnap.data() as UserData;
+        setUserData(data);
 
-      // After getting user data, fetch their conversations
-      const convQuery = query(collection(db, 'conversations'), where('members', 'array-contains', CURRENT_USER_ID));
-      const unsubscribeConversations = onSnapshot(convQuery, async (querySnapshot) => {
-        const convs: Conversation[] = [];
-        for (const doc of querySnapshot.docs) {
-            const convData = doc.data();
-            if (convData.type === 'private') {
-                const otherUserId = convData.members.find((id: string) => id !== CURRENT_USER_ID);
+      } else {
+        setUser(null);
+        setUserData(null);
+        router.push('/');
+      }
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, [router]);
+
+  useEffect(() => {
+    if (!user || !userData) return;
+
+     // After getting user data, fetch their conversations
+    const convQuery = query(collection(db, 'conversations'), where('members', 'array-contains', user.uid));
+    const unsubscribeConversations = onSnapshot(convQuery, async (querySnapshot) => {
+      const convs: Conversation[] = [];
+      for (const docSnapshot of querySnapshot.docs) {
+          const convData = docSnapshot.data();
+          if (convData.type === 'private') {
+              const otherUserId = convData.members.find((id: string) => id !== user.uid);
+              if (otherUserId) {
                 const otherUserDoc = await getDoc(doc(db, 'users', otherUserId));
                 if (otherUserDoc.exists()) {
                     const otherUserData = otherUserDoc.data();
                     convs.push({
-                        id: doc.id,
+                        id: docSnapshot.id,
                         type: 'private',
                         name: otherUserData.name || `User ${otherUserId}`,
                         avatar: otherUserData.avatar || `https://picsum.photos/seed/${otherUserId}/100/100`
                     });
                 }
-            } else { // group
-                 convs.push({
-                    id: doc.id,
-                    type: 'group',
-                    name: convData.name,
-                    avatar: convData.avatar || `https://picsum.photos/seed/${doc.id}/100/100`,
-                    members: convData.members,
-                });
-            }
-        }
-        setConversations(convs);
-        if (convs.length > 0 && !selectedConversation) {
-            setSelectedConversation(convs[0]);
-        }
-      });
-      return () => unsubscribeConversations();
-    };
-    
-    const unsubscribe = getUserData();
-    return () => { unsubscribe.then(unsub => unsub && unsub()) };
+              }
+          } else { // group
+               convs.push({
+                  id: docSnapshot.id,
+                  type: 'group',
+                  name: convData.name,
+                  avatar: convData.avatar || `https://picsum.photos/seed/${docSnapshot.id}/100/100`,
+                  members: convData.members,
+              });
+          }
+      }
+      setConversations(convs);
+      if (convs.length > 0 && !selectedConversation) {
+          // Check if a conversation is stored in localStorage
+          const lastConversationId = localStorage.getItem('selectedConversationId');
+          const lastConv = convs.find(c => c.id === lastConversationId);
+          setSelectedConversation(lastConv || convs[0]);
+      }
+    });
+    return () => unsubscribeConversations();
 
-  }, []);
+  }, [user, userData, selectedConversation]);
+
 
   useEffect(() => {
     if (!selectedConversation) {
         setMessages([]);
         return;
     };
+    // Store selected conversation in local storage
+    localStorage.setItem('selectedConversationId', selectedConversation.id);
 
     // Listen for messages in the current conversation
     const messagesColRef = collection(db, 'conversations', selectedConversation.id, 'messages');
@@ -163,7 +186,7 @@ export default function ChatPage() {
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (newMessage.trim() === '' || !selectedConversation) return;
+    if (newMessage.trim() === '' || !selectedConversation || !user) return;
 
     const messageContent = newMessage;
     setNewMessage('');
@@ -171,8 +194,8 @@ export default function ChatPage() {
     try {
       const messagesColRef = collection(db, 'conversations', selectedConversation.id, 'messages');
       await addDoc(messagesColRef, {
-        senderId: CURRENT_USER_ID,
-        senderName: CURRENT_USER_NAME, // Store sender name for group chats
+        senderId: user.uid,
+        senderName: userData?.name,
         text: messageContent,
         timestamp: serverTimestamp(),
       });
@@ -187,12 +210,12 @@ export default function ChatPage() {
 
     try {
       const result = await triageNotification({ messageContent });
-      toast({
-        title: result.shouldSendNotification
-          ? 'Notification Would Be Sent'
-          : 'Notification Would Not Be Sent',
-        description: result.reason,
-      });
+      if (result.shouldSendNotification) {
+         toast({
+          title: 'Notification Sent (Simulated)',
+          description: result.reason,
+        });
+      }
     } catch (error) {
       console.error('Error triaging notification:', error);
       toast({
@@ -204,10 +227,11 @@ export default function ChatPage() {
   };
   
   const handleGenerateCode = async () => {
+    if (!user) return;
     try {
       const result = await generateContactCode();
       const newCode = result.code;
-      const userDocRef = doc(db, 'users', CURRENT_USER_ID);
+      const userDocRef = doc(db, 'users', user.uid);
       await updateDoc(userDocRef, { contactCode: newCode });
       setUserData(prev => prev ? {...prev, contactCode: newCode} : null);
       toast({
@@ -225,7 +249,7 @@ export default function ChatPage() {
   };
 
   const handleAddContact = async () => {
-    if (!addContactCode.trim()) return;
+    if (!addContactCode.trim() || !user) return;
     
     try {
       const q = query(collection(db, "users"), where("contactCode", "==", addContactCode));
@@ -239,12 +263,13 @@ export default function ChatPage() {
       const newContactDoc = querySnapshot.docs[0];
       const newContactId = newContactDoc.id;
       
-      if(newContactId === CURRENT_USER_ID) {
+      if(newContactId === user.uid) {
         toast({ variant: 'destructive', title: 'Cannot Add Yourself', description: 'You cannot add yourself as a contact.' });
         return;
       }
       
-      if(userData?.contacts.find(c => c.id === newContactId)) {
+      const existingContact = (userData?.contacts || []).find(c => c.id === newContactId)
+      if(existingContact) {
         toast({ variant: 'destructive', title: 'Contact Exists', description: 'This user is already in your contact list.' });
         return;
       }
@@ -257,18 +282,18 @@ export default function ChatPage() {
       };
 
       // Add to current user's contacts
-      const userDocRef = doc(db, 'users', CURRENT_USER_ID);
+      const userDocRef = doc(db, 'users', user.uid);
       const updatedContacts = [...(userData?.contacts || []), newContact];
       await updateDoc(userDocRef, { contacts: updatedContacts });
       
       // Create a new private conversation
-      const conversationId = [CURRENT_USER_ID, newContactId].sort().join('_');
+      const conversationId = [user.uid, newContactId].sort().join('_');
       const convDocRef = doc(db, 'conversations', conversationId);
       const convDocSnap = await getDoc(convDocRef);
       if (!convDocSnap.exists()) {
         await setDoc(convDocRef, {
             type: 'private',
-            members: [CURRENT_USER_ID, newContactId],
+            members: [user.uid, newContactId],
             createdAt: serverTimestamp(),
         });
       }
@@ -285,18 +310,18 @@ export default function ChatPage() {
   };
 
   const handleCreateGroup = async () => {
-     if (!groupName.trim() || groupMembers.length === 0) {
+     if (!groupName.trim() || groupMembers.length === 0 || !user) {
         toast({ variant: 'destructive', title: 'Invalid Group', description: 'Group name and at least one member are required.' });
         return;
      }
 
      try {
-        const allMembers = [CURRENT_USER_ID, ...groupMembers];
+        const allMembers = [user.uid, ...groupMembers];
         const newGroup = {
             name: groupName,
             type: 'group',
             members: allMembers,
-            createdBy: CURRENT_USER_ID,
+            createdBy: user.uid,
             createdAt: serverTimestamp(),
             avatar: `https://picsum.photos/seed/${groupName}/100/100`
         };
@@ -307,8 +332,11 @@ export default function ChatPage() {
         setGroupName('');
         setGroupMembers([]);
         setCreateGroupOpen(false);
-        // Optional: select the new group
-        setSelectedConversation({id: groupDocRef.id, ...newGroup});
+
+        const newConv = {id: groupDocRef.id, ...newGroup};
+        // select the new group
+        setConversations(prev => [...prev, newConv]);
+        setSelectedConversation(newConv);
 
      } catch(error) {
         console.error("Error creating group:", error);
@@ -325,31 +353,64 @@ export default function ChatPage() {
   }
   
   const getSender = (senderId: string) => {
-    if (senderId === CURRENT_USER_ID) {
-      return { name: CURRENT_USER_NAME, avatar: CURRENT_USER_AVATAR };
+    if (senderId === user?.uid) {
+      return { name: userData?.name, avatar: userData?.avatar };
     }
     const contact = userData?.contacts.find(c => c.id === senderId);
+     if (contact) {
+        return { name: contact.name, avatar: contact.avatar };
+    }
+    // Fallback for group members who are not in contacts list (possible in future)
     return { 
-      name: contact?.name || `User ${senderId.substring(0,4)}`, 
-      avatar: contact?.avatar || `https://picsum.photos/seed/${senderId}/100/100` 
+      name: `User ${senderId.substring(0,4)}`, 
+      avatar: `https://picsum.photos/seed/${senderId}/100/100` 
     };
   }
 
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+      // The onAuthStateChanged listener will handle routing to '/'
+    } catch (error) {
+      console.error("Error signing out:", error);
+      toast({
+        variant: 'destructive',
+        title: 'Logout Failed',
+        description: 'There was an error signing you out.',
+      });
+    }
+  };
+
+  if (loading || !user || !userData) {
+    return (
+      <div className="flex h-screen w-full items-center justify-center bg-background">
+        <div className="flex flex-col items-center gap-4">
+            <div className="h-10 w-10 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+            <p className="text-muted-foreground">Loading...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <SidebarProvider>
       <div className="flex min-h-screen bg-background">
         <Sidebar>
           <SidebarHeader>
-            <div className="flex items-center gap-2">
-              <Avatar className="h-8 w-8">
-                <AvatarImage src={CURRENT_USER_AVATAR} alt="User Avatar" data-ai-hint="female person" />
-                <AvatarFallback>{CURRENT_USER_NAME.charAt(0)}</AvatarFallback>
-              </Avatar>
-              <div className="flex flex-col">
-                <span className="text-sm font-semibold text-foreground">{CURRENT_USER_NAME}</span>
-                <span className="text-xs text-muted-foreground">user@email.com</span>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Avatar className="h-8 w-8">
+                  <AvatarImage src={userData?.avatar} alt={userData?.name} data-ai-hint="female person" />
+                  <AvatarFallback>{userData?.name?.charAt(0)}</AvatarFallback>
+                </Avatar>
+                <div className="flex flex-col">
+                  <span className="text-sm font-semibold text-foreground">{userData?.name}</span>
+                  <span className="text-xs text-muted-foreground">{user.email || 'Guest'}</span>
+                </div>
               </div>
+               <Button variant="ghost" size="icon" className="h-7 w-7" onClick={handleLogout}>
+                <LogOut className="h-4 w-4" />
+              </Button>
             </div>
           </SidebarHeader>
           <SidebarContent>
@@ -487,13 +548,13 @@ export default function ChatPage() {
                 <main className="p-4">
                   <div className="space-y-4">
                     {messages.map((message) => {
-                      const isUser = message.senderId === CURRENT_USER_ID;
+                      const isUser = message.senderId === user.uid;
                       const sender = getSender(message.senderId);
                       return (
                         <div key={message.id} className={`flex items-end gap-3 ${isUser ? 'flex-row-reverse' : ''}`}>
-                          <Avatar className="h-8 w-8">
-                             <AvatarImage src={sender.avatar} alt={sender.name} data-ai-hint="person" />
-                            <AvatarFallback>{sender.name.charAt(0)}</AvatarFallback>
+                           <Avatar className="h-8 w-8">
+                             <AvatarImage src={sender?.avatar} alt={sender?.name} data-ai-hint="person" />
+                            <AvatarFallback>{sender?.name?.charAt(0)}</AvatarFallback>
                           </Avatar>
                           <div className={`flex flex-col space-y-1 ${isUser ? 'items-end' : 'items-start'}`}>
                             {selectedConversation.type ==='group' && !isUser && (
@@ -534,7 +595,7 @@ export default function ChatPage() {
              <main className="flex flex-1 items-center justify-center p-4">
                 <div className="text-center">
                     <h2 className="text-2xl font-semibold">Welcome to Cryptochat</h2>
-                    <p className="mt-2 text-muted-foreground">Add a contact or create a group to start chatting.</p>
+                    <p className="mt-2 text-muted-foreground">Select a conversation to start chatting.</p>
                 </div>
             </main>
           )}
