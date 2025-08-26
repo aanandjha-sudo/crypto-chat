@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { SidebarProvider, Sidebar, SidebarInset, SidebarHeader, SidebarTrigger, SidebarContent, SidebarMenu, SidebarMenuItem, SidebarMenuButton } from '@/components/ui/sidebar';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Card, CardContent } from '@/components/ui/card';
@@ -10,38 +10,61 @@ import { MoreVertical, Paperclip, Send } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { triageNotification } from '@/ai/flows/notification-triage';
 import { useToast } from '@/hooks/use-toast';
+import { db } from '@/lib/firebase';
+import { collection, addDoc, query, orderBy, onSnapshot, serverTimestamp, Timestamp } from 'firebase/firestore';
+
 
 interface Message {
-  id: number;
+  id: string;
   sender: 'user' | 'other';
   text: string;
   avatar: string;
   alt: string;
+  timestamp: Timestamp | null;
 }
 
 export default function ChatPage() {
-  const [messages, setMessages] = useState<Message[]>([
-    { id: 1, sender: 'other', text: 'Hey, how is it going?', avatar: 'https://picsum.photos/100/100', alt: 'Alice' },
-    { id: 2, sender: 'user', text: 'Pretty good! Just working on this new app.', avatar: 'https://picsum.photos/100/100', alt: 'User Avatar' },
-  ]);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const { toast } = useToast();
+
+  useEffect(() => {
+    const q = query(collection(db, 'messages'), orderBy('timestamp'));
+    const unsubscribe = onSnapshot(q, (querySnapshot) => {
+      const msgs: Message[] = [];
+      querySnapshot.forEach((doc) => {
+        msgs.push({ id: doc.id, ...doc.data() } as Message);
+      });
+      setMessages(msgs);
+    });
+
+    return () => unsubscribe();
+  }, []);
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     if (newMessage.trim() === '') return;
 
-    const newMessageObj: Message = {
-      id: messages.length + 1,
-      sender: 'user',
-      text: newMessage,
-      avatar: 'https://picsum.photos/100/100',
-      alt: 'User Avatar',
-    };
-
-    setMessages([...messages, newMessageObj]);
     const messageContent = newMessage;
     setNewMessage('');
+
+    try {
+      await addDoc(collection(db, 'messages'), {
+        sender: 'user',
+        text: messageContent,
+        avatar: 'https://picsum.photos/100/100',
+        alt: 'User Avatar',
+        timestamp: serverTimestamp(),
+      });
+    } catch (error) {
+      console.error('Error sending message:', error);
+       toast({
+        variant: 'destructive',
+        title: 'Error',
+        description: 'Could not send message.',
+      });
+    }
+
 
     try {
       const result = await triageNotification({ messageContent });
