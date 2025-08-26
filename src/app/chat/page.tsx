@@ -6,7 +6,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { Paperclip, Send, RefreshCw, Users, User, LogOut, Phone, PhoneOff, Mic, MicOff, Copy, MoreVertical } from 'lucide-react';
+import { Paperclip, Send, RefreshCw, Users, User, LogOut, Phone, PhoneOff, Mic, MicOff, Copy } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { triageNotification } from '@/ai/flows/notification-triage';
 import { generateContactCode } from '@/ai/flows/user-codes';
@@ -16,7 +16,6 @@ import { db } from '@/lib/firebase';
 import { collection, addDoc, query, orderBy, onSnapshot, serverTimestamp, Timestamp, doc, setDoc, getDoc, updateDoc, where, getDocs, DocumentData, writeBatch } from 'firebase/firestore';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from "@/components/ui/checkbox"
-import type { FirebaseError } from 'firebase/app';
 import {
   Dialog,
   DialogContent,
@@ -188,85 +187,22 @@ export default function ChatPage() {
     initializeUser();
   }, [createNewUser]);
 
-  useEffect(() => {
+  const loadConversations = useCallback(async () => {
     if (!currentUser) return;
-
-    // This is the query that was causing permission errors.
-    const convQuery = query(collection(db, 'conversations'), where('members', 'array-contains', currentUser.id));
     
-    const unsubscribeConversations = onSnapshot(convQuery, async (querySnapshot) => {
-      const updatedConversations: Conversation[] = [];
-      for (const docSnapshot of querySnapshot.docs) {
-          const convData = docSnapshot.data() as DocumentData;
-          let conv: Conversation | null = null;
-          if (convData.type === 'private') {
-              const otherUserId = convData.members?.find((id: string) => id !== currentUser.id);
-              if (otherUserId) {
-                const otherUserDoc = await getDoc(doc(db, 'users', otherUserId));
-                if (otherUserDoc.exists()) {
-                    const otherUserData = otherUserDoc.data();
-                    conv = {
-                        id: docSnapshot.id,
-                        type: 'private',
-                        name: otherUserData.name || `User ${otherUserId}`,
-                        avatar: otherUserData.avatar || `https://picsum.photos/seed/${otherUserId}/100/100`,
-                        members: convData.members,
-                        call: convData.call,
-                    };
-                }
-              }
-          } else { // group
-               conv = {
-                  id: docSnapshot.id,
-                  type: 'group',
-                  name: convData.name,
-                  avatar: convData.avatar || `https://picsum.photos/seed/${docSnapshot.id}/100/100`,
-                  members: convData.members,
-               };
-          }
-          if (conv) updatedConversations.push(conv);
-      }
-      setConversations(updatedConversations);
+    setLoading(true);
+    const loadedConversations: Conversation[] = [];
+    const conversationPromises: Promise<void>[] = [];
 
-      const currentSelectedConv = selectedConversation 
-          ? updatedConversations.find(c => c.id === selectedConversation.id)
-          : null;
-      
-      if(currentSelectedConv) {
-          setSelectedConversation(currentSelectedConv);
-      } else if (updatedConversations.length > 0 && !selectedConversation) {
-          const lastConversationId = localStorage.getItem('selectedConversationId');
-          const lastConv = updatedConversations.find(c => c.id === lastConversationId);
-          setSelectedConversation(lastConv || updatedConversations[0]);
-      }
-    }, (error) => {
-        console.error("Error fetching conversations:", error);
-        if (error.code === 'permission-denied') {
-            toast({
-                variant: 'destructive',
-                title: 'Permission Error',
-                description: 'Could not load your chats due to security rules. Trying a fallback method.'
-            });
-            // Fallback logic if the main query fails
-            loadConversationsIndividually();
-        }
-    });
-
-    const loadConversationsIndividually = async () => {
-        if (!currentUser) return;
-        const groupQuery = query(collection(db, 'conversations'), where('members', 'array-contains', currentUser.id), where('type', '==', 'group'));
-        
-        const individualConvs: Conversation[] = [];
-
-        // Fetch private chats based on contacts
-        for (const contact of currentUser.contacts) {
-            const conversationId = [currentUser.id, contact.id].sort().join('_');
-            const convDocRef = doc(db, 'conversations', conversationId);
-            const convDocSnap = await getDoc(convDocRef);
-            if (convDocSnap.exists()) {
-                const convData = convDocSnap.data();
-                 individualConvs.push({
-                    id: convDocSnap.id,
+    // Create promises for fetching private conversations from contacts
+    currentUser.contacts.forEach(contact => {
+        const conversationId = [currentUser.id, contact.id].sort().join('_');
+        const convDocRef = doc(db, 'conversations', conversationId);
+        const promise = getDoc(convDocRef).then(docSnap => {
+            if (docSnap.exists()) {
+                const convData = docSnap.data();
+                loadedConversations.push({
+                    id: docSnap.id,
                     type: 'private',
                     name: contact.name,
                     avatar: contact.avatar,
@@ -274,38 +210,56 @@ export default function ChatPage() {
                     call: convData.call,
                 });
             }
-        }
+        });
+        conversationPromises.push(promise);
+    });
 
-        // Fetch group chats
-        try {
-            const groupSnapshot = await getDocs(groupQuery);
-            groupSnapshot.forEach(docSnapshot => {
-                 const convData = docSnapshot.data();
-                 individualConvs.push({
-                    id: docSnapshot.id,
-                    type: 'group',
-                    name: convData.name,
-                    avatar: convData.avatar || `https://picsum.photos/seed/${docSnapshot.id}/100/100`,
-                    members: convData.members,
-                 });
+    // Create a promise for fetching group conversations
+    const groupQuery = query(collection(db, 'conversations'), where('members', 'array-contains', currentUser.id), where('type', '==', 'group'));
+    const groupPromise = getDocs(groupQuery).then(querySnapshot => {
+        querySnapshot.forEach(docSnap => {
+            const convData = docSnap.data();
+            loadedConversations.push({
+                id: docSnap.id,
+                type: 'group',
+                name: convData.name,
+                avatar: convData.avatar || `https://picsum.photos/seed/${docSnap.id}/100/100`,
+                members: convData.members,
             });
-        } catch (groupError) {
-             console.error("Could not fetch group chats:", groupError);
-             toast({ variant: 'destructive', title: 'Group Chat Error', description: 'Failed to load group chats.'})
-        }
+        });
+    });
+    conversationPromises.push(groupPromise);
+
+    try {
+        await Promise.all(conversationPromises);
         
-        setConversations(individualConvs);
-         if (individualConvs.length > 0 && !selectedConversation) {
-          const lastConversationId = localStorage.getItem('selectedConversationId');
-          const lastConv = individualConvs.find(c => c.id === lastConversationId);
-          setSelectedConversation(lastConv || individualConvs[0]);
-      }
+        // Sort conversations or handle as needed
+        loadedConversations.sort((a, b) => a.name.localeCompare(b.name));
+        
+        setConversations(loadedConversations);
+
+        if (loadedConversations.length > 0 && !selectedConversation) {
+            const lastConversationId = localStorage.getItem('selectedConversationId');
+            const lastConv = loadedConversations.find(c => c.id === lastConversationId);
+            setSelectedConversation(lastConv || loadedConversations[0]);
+        }
+    } catch (error) {
+        console.error("Error loading conversations:", error);
+        toast({
+            variant: 'destructive',
+            title: 'Loading Error',
+            description: 'Could not load your conversations.'
+        });
+    } finally {
+        setLoading(false);
     }
+  }, [currentUser, selectedConversation, toast]);
 
-
-    return () => unsubscribeConversations();
-
-  }, [currentUser, selectedConversation?.id, toast]);
+  useEffect(() => {
+    if (currentUser) {
+        loadConversations();
+    }
+  }, [currentUser, loadConversations]);
 
 
   useEffect(() => {
@@ -549,6 +503,7 @@ export default function ChatPage() {
       toast({ title: 'Contact Added!', description: `You've successfully added ${newContact.name}.` });
       setAddContactCode('');
       setAddContactOpen(false);
+      await loadConversations(); // Refresh conversation list
 
     } catch (error) {
        console.error("Error adding contact:", error)
@@ -570,7 +525,7 @@ export default function ChatPage() {
             members: allMembers,
             createdBy: currentUser.id,
             createdAt: serverTimestamp(),
-            avatar: `https://picsum.photos/seed/${groupName}/100/100`
+            avatar: `https://picsum.photos/seed/${groupName.replace(/\s+/g, '-')}/100/100`
         };
 
         const groupDocRef = await addDoc(collection(db, 'conversations'), newGroup);
@@ -606,11 +561,8 @@ export default function ChatPage() {
      if (contact) {
         return { name: contact.name, avatar: contact.avatar };
     }
+    
     // Fallback for users not in contacts (e.g. in a group chat)
-    const conversationMember = conversations
-        .flatMap(c => c.members)
-        .find(mId => mId === senderId);
-
     return { 
       name: `User ${senderId.substring(0,4)}`, 
       avatar: `https://picsum.photos/seed/${senderId}/100/100` 
@@ -618,7 +570,7 @@ export default function ChatPage() {
   }
 
   const handleSwitchAccount = async () => {
-    if (!loginCodeInput.trim() || !currentUser) return;
+    if (!loginCodeInput.trim()) return;
 
     try {
       const q = query(collection(db, 'users'), where('loginCode', '==', loginCodeInput));
@@ -789,9 +741,8 @@ export default function ChatPage() {
       if (selectedConversation && !isSilent) {
           const callDocRef = doc(db, 'conversations', selectedConversation.id);
           const callSnap = await getDoc(callDocRef);
-          // Only update if the call is active to avoid race conditions
           if (callSnap.exists() && callSnap.data().call?.active) {
-            await updateDoc(callDocRef, { 'call.status': 'ended', 'call.active': false });
+             await updateDoc(callDocRef, { call: { active: false, status: 'ended', initiator: '' } });
           }
       }
   }, [selectedConversation]);
@@ -1130,7 +1081,7 @@ export default function ChatPage() {
                           </Avatar>
                           <div className={`flex flex-col space-y-1 ${isUser ? 'items-end' : 'items-start'}`}>
                             {selectedConversation.type ==='group' && !isUser && (
-                                <span className="text-xs text-muted-foreground px-3">{message.senderName}</span>
+                                <span className="text-xs text-muted-foreground px-3">{sender.name}</span>
                             )}
                             <Card className={`rounded-2xl p-3 max-w-sm md:max-w-md ${isUser ? 'bg-primary text-primary-foreground' : 'bg-muted'}`}>
                               <CardContent className="p-0">
@@ -1166,8 +1117,8 @@ export default function ChatPage() {
           ) : (
              <main className="flex flex-1 items-center justify-center p-4">
                 <div className="text-center">
-                    <h2 className="text-2xl font-semibold">Welcome to Cryptochat</h2>
-                    <p className="mt-2 text-muted-foreground">Select a conversation or create a new one to start chatting.</p>
+                    <h2 className="text-2xl font-headline font-semibold">Welcome to Cryptochat</h2>
+                    <p className="mt-2 text-muted-foreground">Select a conversation or add a contact to start chatting.</p>
                 </div>
             </main>
           )}
