@@ -186,6 +186,15 @@ export default function ChatPage() {
           const lastConv = updatedConversations.find(c => c.id === lastConversationId);
           setSelectedConversation(lastConv || updatedConversations[0]);
       }
+    }, (error) => {
+        console.error("Error fetching conversations:", error);
+        if (error.code === 'permission-denied') {
+            toast({
+                variant: 'destructive',
+                title: 'Permission Error',
+                description: 'Could not load chats. Check your Firestore security rules.'
+            })
+        }
     });
     return () => unsubscribeConversations();
 
@@ -214,30 +223,54 @@ export default function ChatPage() {
   }, [selectedConversation?.id]);
   
   useEffect(() => {
-    const callState = selectedConversation?.call;
-    const isPartOfCall = callState?.active && user?.uid && selectedConversation.members?.includes(user.uid);
-    
-    if (isPartOfCall) {
+    if (!selectedConversation || !user) return;
+  
+    const callDocRef = doc(db, "conversations", selectedConversation.id);
+  
+    const unsubscribe = onSnapshot(callDocRef, (snapshot) => {
+      const convData = snapshot.data();
+      if (!convData) return;
+  
+      // Update the whole conversation object in state to ensure UI reacts
+      setSelectedConversation(prev => {
+        if (!prev || prev.id !== snapshot.id) return prev;
+        
+        // This is a simplified update; you might need a more sophisticated merge
+        const updatedCallState = convData.call;
+        const needsUpdate = JSON.stringify(prev.call) !== JSON.stringify(updatedCallState);
+
+        return needsUpdate ? { ...prev, call: updatedCallState } : prev;
+      });
+  
+      const callState = convData.call as CallState | undefined;
+      const isPartOfCall = callState?.active && user.uid && convData.members?.includes(user.uid);
+  
+      if (isPartOfCall) {
         const isRingingForMe = callState.status === 'ringing' && callState.initiator !== user.uid;
         const isConnected = callState.status === 'connected';
         const isDialing = callState.status === 'dialing' || (callState.status === 'ringing' && callState.initiator === user.uid);
-
+        
         if (isRingingForMe || isConnected || isDialing) {
-            setCallModalOpen(true);
+            if (!isCallModalOpen) setCallModalOpen(true);
         } else {
-             // call ended, declined, or user hung up
-             if(peerConnection.current) {
-                handleHangUp(true); // silent hangup
-             }
-             setCallModalOpen(false);
+            // Call ended or was declined
+            if (peerConnection.current) {
+              handleHangUp(true); // silent hangup to clean up local resources
+            }
+            if(isCallModalOpen) setCallModalOpen(false);
         }
-    } else {
-        if(peerConnection.current) {
-            handleHangUp(true); // silent hangup
+      } else {
+        // No active call I am part of
+        if (peerConnection.current) {
+          handleHangUp(true); // silent hangup
         }
-        setCallModalOpen(false);
-    }
-  }, [selectedConversation?.call, user?.uid])
+        if(isCallModalOpen) setCallModalOpen(false);
+      }
+    });
+  
+    return () => unsubscribe();
+  
+  }, [selectedConversation?.id, user?.uid, isCallModalOpen]);
 
 
   const handleSendMessage = async (e: React.FormEvent) => {
@@ -446,7 +479,7 @@ export default function ChatPage() {
     try {
       if(peerConnection.current) await handleHangUp(false);
       await signOut(auth);
-      // router.push('/'); // The onAuthStateChanged listener will handle this
+      router.push('/');
     } catch (error) {
       console.error("Error signing out:", error);
       toast({
@@ -462,6 +495,11 @@ export default function ChatPage() {
   const initializePeerConnection = async () => {
     if (!selectedConversation || !user) return null;
     
+    // Clean up any existing connection
+    if (peerConnection.current) {
+        peerConnection.current.close();
+    }
+
     const pc = new RTCPeerConnection(servers);
     
     localStream.current = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
@@ -557,6 +595,9 @@ export default function ChatPage() {
         localStream.current.getTracks().forEach(track => track.stop());
         localStream.current = null;
       }
+      if(remoteAudioRef.current) {
+        remoteAudioRef.current.srcObject = null;
+      }
       
       setCallModalOpen(false);
 
@@ -573,7 +614,7 @@ export default function ChatPage() {
      if (!selectedConversation || !user) return;
      const callDocRef = doc(db, 'conversations', selectedConversation.id);
      await updateDoc(callDocRef, { call: { active: false, status: 'declined' } });
-     setCallModalOpen(false); // Close modal for decliner
+     setCallModalOpen(false);
   }
 
   const handleToggleMute = () => {
@@ -599,7 +640,7 @@ export default function ChatPage() {
 
   const renderCallModal = () => {
     const callState = selectedConversation?.call;
-    if (!callState?.active) return null;
+    if (!isCallModalOpen || !callState?.active) return null;
 
     const isInitiator = callState.initiator === user?.uid;
     const callStatus = callState.status;
@@ -608,7 +649,7 @@ export default function ChatPage() {
     let content = <div className="h-10 w-10 animate-spin rounded-full border-4 border-primary border-t-transparent mx-auto" />;
     let actions = (
        <Button variant="destructive" onClick={() => handleHangUp(false)}>
-          <PhoneOff className="mr-2" />
+          <PhoneOff className="mr-2 h-4 w-4" />
           Hang Up
         </Button>
     )
@@ -619,11 +660,11 @@ export default function ChatPage() {
         actions = (
             <>
                 <Button onClick={handleAnswerCall} className="bg-green-600 hover:bg-green-700">
-                    <Phone className="mr-2" />
+                    <Phone className="mr-2 h-4 w-4" />
                     Accept
                 </Button>
                 <Button variant="destructive" onClick={handleDeclineCall}>
-                    <PhoneOff className="mr-2" />
+                    <PhoneOff className="mr-2 h-4 w-4" />
                     Decline
                 </Button>
             </>
@@ -637,7 +678,7 @@ export default function ChatPage() {
             <div className="flex items-center justify-center gap-4">
                 <p>Call is active.</p>
                 <Button variant="outline" size="icon" onClick={handleToggleMute}>
-                   {isMuted ? <MicOff /> : <Mic />}
+                   {isMuted ? <MicOff className="h-4 w-4"/> : <Mic className="h-4 w-4"/>}
                 </Button>
             </div>
         )
@@ -645,13 +686,15 @@ export default function ChatPage() {
 
 
     return (
-         <AlertDialog open={isCallModalOpen} onOpenChange={setCallModalOpen}>
+         <AlertDialog open={isCallModalOpen}>
             <AlertDialogContent onEscapeKeyDown={(e) => e.preventDefault()}>
                 <AlertDialogHeader>
                     <AlertDialogTitle>{title}</AlertDialogTitle>
                 </AlertDialogHeader>
-                <AlertDialogDescription className="text-center my-4">
-                    {content}
+                <AlertDialogDescription asChild>
+                    <div className="text-center my-4">
+                        {content}
+                    </div>
                 </AlertDialogDescription>
                 <AlertDialogFooter className="sm:justify-center">
                     {actions}
@@ -675,6 +718,7 @@ export default function ChatPage() {
                 <div className="flex flex-col">
                   <span className="text-sm font-semibold text-foreground">{userData?.name}</span>
                   <span className="text-xs text-muted-foreground">{user.email || 'Guest'}</span>
+                  <span className="text-xs text-muted-foreground font-mono truncate">UID: {user.uid}</span>
                 </div>
               </div>
                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={handleLogout}>
@@ -882,5 +926,3 @@ export default function ChatPage() {
     </SidebarProvider>
   );
 }
-
-    
