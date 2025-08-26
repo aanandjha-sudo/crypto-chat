@@ -8,7 +8,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Card, CardHeader, CardContent, CardTitle, CardDescription } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { Send, RefreshCw, Users, User, Phone, PhoneOff, Mic, MicOff, Copy, Edit, MessageSquare, Contact, Bell, BellOff, Upload, Coffee, SmilePlus, Trash2, Paperclip, File, Video, Image as ImageIcon } from 'lucide-react';
+import { Send, RefreshCw, Users, User, Phone, PhoneOff, Mic, MicOff, Copy, Edit, MessageSquare, Contact, Bell, BellOff, Upload, Coffee, SmilePlus, Trash2, Paperclip, File, Video, Image as ImageIcon, Swords } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { triageNotification } from '@/ai/flows/notification-triage';
@@ -88,7 +88,7 @@ type CallState = {
     status: 'dialing' | 'ringing' | 'connected' | 'declined' | 'ended';
 }
 
-type ActiveView = 'chats' | 'contacts' | 'profile';
+type ActiveView = 'chats' | 'contacts' | 'profile' | 'games';
 
 function ChatSkeleton() {
     return (
@@ -1462,6 +1462,37 @@ export default function ChatPage() {
         </main>
       </>
   );
+
+  const renderGamesView = () => (
+      <>
+        <header className="flex h-14 items-center border-b bg-background px-4">
+          <div className="flex items-center gap-2">
+            <SidebarTrigger className="md:hidden" />
+            <h2 className="text-lg font-semibold">Games</h2>
+          </div>
+        </header>
+        <main className="flex-1 p-4 md:p-6">
+            <Card>
+                <CardHeader>
+                    <CardTitle>2-Player Games</CardTitle>
+                    <CardDescription>Challenge your contacts to a friendly game.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                        <Card className="flex flex-col items-center justify-center p-6 hover:bg-muted cursor-pointer transition-colors">
+                            <Swords className="h-12 w-12 text-muted-foreground mb-2" />
+                            <p className="font-semibold">Tic-Tac-Toe</p>
+                            <p className="text-sm text-muted-foreground">Coming Soon</p>
+                        </Card>
+                         <Card className="flex flex-col items-center justify-center p-6 bg-muted/50 cursor-not-allowed">
+                            <p className="font-semibold text-muted-foreground">More Games Coming Soon...</p>
+                        </Card>
+                    </div>
+                </CardContent>
+            </Card>
+        </main>
+      </>
+  );
   
   const renderMessageContent = (message: Message) => {
     switch (message.type) {
@@ -1533,6 +1564,16 @@ export default function ChatPage() {
                           >
                               <Contact />
                               <span>Contacts</span>
+                          </SidebarMenuButton>
+                      </SidebarMenuItem>
+                       <SidebarMenuItem>
+                          <SidebarMenuButton 
+                              tooltip="Games" 
+                              isActive={activeView === 'games'}
+                              onClick={() => setActiveView('games')}
+                          >
+                              <Swords />
+                              <span>Games</span>
                           </SidebarMenuButton>
                       </SidebarMenuItem>
                       <SidebarMenuItem>
@@ -1802,6 +1843,7 @@ export default function ChatPage() {
               />
           )}
           {activeView === 'profile' && renderProfileView()}
+          {activeView === 'games' && renderGamesView()}
       </SidebarInset>
       {renderCallModal()}
       {renderRegenDialog()}
@@ -1809,4 +1851,5 @@ export default function ChatPage() {
     </div>
   );
 }
+
 
