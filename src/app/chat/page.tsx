@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { SidebarProvider, Sidebar, SidebarInset, SidebarHeader, SidebarTrigger, SidebarContent, SidebarMenu, SidebarMenuItem, SidebarMenuButton, SidebarFooter, useSidebar } from '@/components/ui/sidebar';
+import { Sidebar, SidebarInset, SidebarHeader, SidebarTrigger, SidebarContent, SidebarMenu, SidebarMenuItem, SidebarMenuButton, SidebarFooter, useSidebar } from '@/components/ui/sidebar';
 import { SheetTitle } from '@/components/ui/sheet';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -73,7 +73,7 @@ type CallState = {
 
 type ActiveView = 'chats' | 'contacts' | 'profile';
 
-function ChatLayout() {
+export default function ChatPage() {
   const { isMobile } = useSidebar();
   const [currentUser, setCurrentUser] = useState<UserData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1298,12 +1298,4 @@ function ChatLayout() {
       <audio ref={remoteAudioRef} autoPlay playsInline />
     </div>
   );
-}
-
-export default function ChatPage() {
-    return (
-        <SidebarProvider>
-            <ChatLayout />
-        </SidebarProvider>
-    );
 }
