@@ -46,18 +46,21 @@ export function TicTacToe({ conversationId, currentUser }: TicTacToeProps) {
                 const conversationDoc = await getDoc(doc(db, 'conversations', conversationId));
                 if(conversationDoc.exists()) {
                     const members = conversationDoc.data().members as string[];
-                    const newGameState: GameState = {
-                        board: Array(9).fill(null),
-                        nextPlayer: 'X',
-                        winner: null,
-                        players: {
-                            X: members[0],
-                            O: members[1]
-                        },
-                        scores: { X: 0, O: 0 }
-                    };
-                    await setDoc(gameDocRef, newGameState);
-                    setGameState(newGameState);
+                    // Ensure private chat with 2 members
+                    if (members.length === 2) {
+                        const newGameState: GameState = {
+                            board: Array(9).fill(null),
+                            nextPlayer: 'X',
+                            winner: null,
+                            players: {
+                                X: members[0], // Player 1 is always X
+                                O: members[1]  // Player 2 is always O
+                            },
+                            scores: { X: 0, O: 0 }
+                        };
+                        await setDoc(gameDocRef, newGameState);
+                        setGameState(newGameState);
+                    }
                 }
             }
         });
@@ -117,7 +120,7 @@ export function TicTacToe({ conversationId, currentUser }: TicTacToeProps) {
         
          const newGameState: Partial<GameState> = {
             board: Array(9).fill(null),
-            nextPlayer: 'X',
+            nextPlayer: 'X', // X always starts
             winner: null,
             // Keep players and scores
          };
@@ -135,8 +138,8 @@ export function TicTacToe({ conversationId, currentUser }: TicTacToeProps) {
             return `${winnerName} won!`;
         }
 
-        const nextPlayerName = players[nextPlayer] === currentUser.id ? "Your" : "Opponent's";
-        return `${nextPlayerName} turn`;
+        const nextPlayerIsMe = players[nextPlayer] === currentUser.id;
+        return nextPlayerIsMe ? "Your turn" : "Opponent's turn";
     };
 
     if (!gameState) {
@@ -155,12 +158,24 @@ export function TicTacToe({ conversationId, currentUser }: TicTacToeProps) {
     }
     
     const mySymbol = Object.keys(gameState.players).find(key => gameState.players[key as PlayerSymbol] === currentUser.id) as PlayerSymbol | undefined;
+    const opponentSymbol = mySymbol === 'X' ? 'O' : 'X';
+
+    if(!mySymbol) {
+        return (
+            <Card>
+                <CardHeader>
+                    <CardTitle>Error</CardTitle>
+                    <CardDescription>Could not join game. You may not be a member of this conversation.</CardDescription>
+                </CardHeader>
+            </Card>
+        )
+    }
 
     return (
         <Card>
             <CardHeader>
                 <CardTitle>Tic-Tac-Toe</CardTitle>
-                <CardDescription>First to get 3 in a row wins. You are '{mySymbol}'.</CardDescription>
+                <CardDescription>You are playing as '{mySymbol}'. First to get 3 in a row wins.</CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col items-center gap-4">
                  <div className="text-lg font-semibold p-2 bg-muted rounded-md">{getStatusMessage()}</div>
@@ -180,9 +195,9 @@ export function TicTacToe({ conversationId, currentUser }: TicTacToeProps) {
                 </div>
                  <div className="flex items-center gap-4 text-lg">
                     <span>Scores:</span>
-                    <span>You ({gameState.scores[mySymbol!] || 0})</span>
+                    <span>You ({gameState.scores[mySymbol] || 0})</span>
                     <span>-</span>
-                    <span>Opponent ({gameState.scores[mySymbol === 'X' ? 'O' : 'X'] || 0})</span>
+                    <span>Opponent ({gameState.scores[opponentSymbol] || 0})</span>
                 </div>
                 {gameState.winner && (
                      <Button onClick={handleResetGame}>
