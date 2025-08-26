@@ -6,7 +6,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { Paperclip, Send, RefreshCw, Users, User, LogOut, Phone, PhoneOff, Mic, MicOff, Copy } from 'lucide-react';
+import { Paperclip, Send, RefreshCw, Users, User, LogOut, Phone, PhoneOff, Mic, MicOff, Copy, MoreVertical } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { triageNotification } from '@/ai/flows/notification-triage';
 import { generateContactCode } from '@/ai/flows/user-codes';
@@ -191,7 +191,9 @@ export default function ChatPage() {
   useEffect(() => {
     if (!currentUser) return;
 
+    // This is the query that was causing permission errors.
     const convQuery = query(collection(db, 'conversations'), where('members', 'array-contains', currentUser.id));
+    
     const unsubscribeConversations = onSnapshot(convQuery, async (querySnapshot) => {
       const updatedConversations: Conversation[] = [];
       for (const docSnapshot of querySnapshot.docs) {
@@ -239,15 +241,68 @@ export default function ChatPage() {
       }
     }, (error) => {
         console.error("Error fetching conversations:", error);
-        const firebaseError = error as FirebaseError;
-        if (firebaseError.code === 'permission-denied') {
+        if (error.code === 'permission-denied') {
             toast({
                 variant: 'destructive',
                 title: 'Permission Error',
-                description: 'Could not load chats. Check your Firestore security rules.'
-            })
+                description: 'Could not load your chats due to security rules. Trying a fallback method.'
+            });
+            // Fallback logic if the main query fails
+            loadConversationsIndividually();
         }
     });
+
+    const loadConversationsIndividually = async () => {
+        if (!currentUser) return;
+        const groupQuery = query(collection(db, 'conversations'), where('members', 'array-contains', currentUser.id), where('type', '==', 'group'));
+        
+        const individualConvs: Conversation[] = [];
+
+        // Fetch private chats based on contacts
+        for (const contact of currentUser.contacts) {
+            const conversationId = [currentUser.id, contact.id].sort().join('_');
+            const convDocRef = doc(db, 'conversations', conversationId);
+            const convDocSnap = await getDoc(convDocRef);
+            if (convDocSnap.exists()) {
+                const convData = convDocSnap.data();
+                 individualConvs.push({
+                    id: convDocSnap.id,
+                    type: 'private',
+                    name: contact.name,
+                    avatar: contact.avatar,
+                    members: convData.members,
+                    call: convData.call,
+                });
+            }
+        }
+
+        // Fetch group chats
+        try {
+            const groupSnapshot = await getDocs(groupQuery);
+            groupSnapshot.forEach(docSnapshot => {
+                 const convData = docSnapshot.data();
+                 individualConvs.push({
+                    id: docSnapshot.id,
+                    type: 'group',
+                    name: convData.name,
+                    avatar: convData.avatar || `https://picsum.photos/seed/${docSnapshot.id}/100/100`,
+                    members: convData.members,
+                 });
+            });
+        } catch (groupError) {
+             console.error("Could not fetch group chats:", groupError);
+             toast({ variant: 'destructive', title: 'Group Chat Error', description: 'Failed to load group chats.'})
+        }
+        
+        setConversations(individualConvs);
+         if (individualConvs.length > 0 && !selectedConversation) {
+          const lastConversationId = localStorage.getItem('selectedConversationId');
+          const lastConv = individualConvs.find(c => c.id === lastConversationId);
+          setSelectedConversation(lastConv || individualConvs[0]);
+      }
+    }
+
+
     return () => unsubscribeConversations();
 
   }, [currentUser, selectedConversation?.id, toast]);
@@ -269,10 +324,13 @@ export default function ChatPage() {
         msgs.push({ id: doc.id, ...doc.data() } as Message);
       });
       setMessages(msgs);
+    }, (error) => {
+        console.error(`Error fetching messages for ${selectedConversation.id}:`, error);
+        toast({variant: 'destructive', title: 'Message Error', description: `Could not load messages for ${selectedConversation.name}.`})
     });
 
     return () => unsubscribe();
-  }, [selectedConversation?.id]);
+  }, [selectedConversation?.id, toast]);
   
   useEffect(() => {
     if (!selectedConversation || !currentUser) return;
@@ -284,32 +342,29 @@ export default function ChatPage() {
       if (!convData) return;
   
       const callState = convData.call as CallState | undefined;
-      const isPartOfCall = callState?.active && convData.members?.includes(currentUser.id);
-      
+
       setSelectedConversation(prev => {
         if (!prev || prev.id !== snapshot.id) return prev;
         const needsUpdate = JSON.stringify(prev.call) !== JSON.stringify(callState);
         return needsUpdate ? { ...prev, call: callState } : prev;
       });
 
+      const isPartOfCall = callState?.active && convData.members?.includes(currentUser.id);
+
       if (isPartOfCall) {
         const isRingingForMe = callState.status === 'ringing' && callState.initiator !== currentUser.id;
-        const isConnected = callState.status === 'connected';
-        const isDialing = callState.status === 'dialing' || (callState.status === 'ringing' && callState.initiator === currentUser.id);
         
-        if (isRingingForMe || isConnected || isDialing) {
-            if (!isCallModalOpen) setCallModalOpen(true);
-        } else {
-            if (peerConnection.current) {
-              handleHangUp(true); // silent hangup
-            }
-            if(isCallModalOpen) setCallModalOpen(false);
+        if (isRingingForMe) {
+          if (!isCallModalOpen) setCallModalOpen(true);
+        } else if (callState.status === 'connected') {
+           if (!isCallModalOpen) setCallModalOpen(true);
+        } else if(callState.status === 'dialing' || (callState.status === 'ringing' && callState.initiator === currentUser.id)) {
+           if (!isCallModalOpen) setCallModalOpen(true);
+        } else { // Call ended or declined
+          if (isCallModalOpen) handleHangUp(true); // silent hangup
         }
-      } else {
-        if (peerConnection.current) {
-          handleHangUp(true); // silent hangup
-        }
-        if(isCallModalOpen) setCallModalOpen(false);
+      } else { // No active call for me
+         if (isCallModalOpen) handleHangUp(true); // silent hangup
       }
     });
   
@@ -664,7 +719,7 @@ export default function ChatPage() {
   }, [currentUser, selectedConversation, toast]);
   
   const handleInitiateCall = async () => {
-    if (!selectedConversation || !currentUser) return;
+    if (!selectedConversation || !currentUser || selectedConversation.type !== 'private') return;
     
     const pc = await initializePeerConnection();
     if (!pc) return;
@@ -690,7 +745,7 @@ export default function ChatPage() {
   };
 
   const handleAnswerCall = async () => {
-    if (!selectedConversation) return;
+    if (!selectedConversation || !currentUser) return;
 
     const pc = await initializePeerConnection();
     if (!pc) return;
@@ -734,18 +789,19 @@ export default function ChatPage() {
       if (selectedConversation && !isSilent) {
           const callDocRef = doc(db, 'conversations', selectedConversation.id);
           const callSnap = await getDoc(callDocRef);
+          // Only update if the call is active to avoid race conditions
           if (callSnap.exists() && callSnap.data().call?.active) {
-            await updateDoc(callDocRef, { call: { active: false, status: 'ended', initiator: '' } });
+            await updateDoc(callDocRef, { 'call.status': 'ended', 'call.active': false });
           }
       }
   }, [selectedConversation]);
 
-  const handleDeclineCall = async () => {
+  const handleDeclineCall = useCallback(async () => {
      if (!selectedConversation || !currentUser) return;
      const callDocRef = doc(db, 'conversations', selectedConversation.id);
-     await updateDoc(callDocRef, { call: { active: false, status: 'declined', initiator: '' } });
-     handleHangUp(true);
-  }
+     await updateDoc(callDocRef, { 'call.status': 'declined', 'call.active': false });
+     handleHangUp(true); // silent hangup
+  }, [selectedConversation, currentUser, handleHangUp]);
 
   const handleToggleMute = () => {
     if (localStream.current) {
@@ -816,8 +872,8 @@ export default function ChatPage() {
 
 
     return (
-         <AlertDialog open={isCallModalOpen} onOpenChange={setCallModalOpen}>
-            <AlertDialogContent onEscapeKeyDown={(e) => e.preventDefault()}>
+         <AlertDialog open={isCallModalOpen} onOpenChange={(isOpen) => { if (!isOpen) handleDeclineCall(); else setCallModalOpen(true);}}>
+            <AlertDialogContent onEscapeKeyDown={(e) => { e.preventDefault(); handleDeclineCall(); }}>
                 <AlertDialogHeader>
                     <AlertDialogTitle className="text-center">{title}</AlertDialogTitle>
                 </AlertDialogHeader>
@@ -1123,4 +1179,3 @@ export default function ChatPage() {
     </SidebarProvider>
   );
 }
-
