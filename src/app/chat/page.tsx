@@ -64,7 +64,7 @@ type CallState = {
     offer?: any;
     answer?: any;
     initiator: string;
-    status: 'dialing' | 'ringing' | 'connected' | 'declined';
+    status: 'dialing' | 'ringing' | 'connected' | 'declined' | 'ended';
 }
 
 
@@ -142,10 +142,9 @@ export default function ChatPage() {
 
     const convQuery = query(collection(db, 'conversations'), where('members', 'array-contains', user.uid));
     const unsubscribeConversations = onSnapshot(convQuery, async (querySnapshot) => {
-      const convs: Conversation[] = [];
       const updatedConversations: Conversation[] = [];
       for (const docSnapshot of querySnapshot.docs) {
-          const convData = docSnapshot.data() as Conversation;
+          const convData = docSnapshot.data() as DocumentData;
           let conv: Conversation | null = null;
           if (convData.type === 'private') {
               const otherUserId = convData.members?.find((id: string) => id !== user.uid);
@@ -176,21 +175,11 @@ export default function ChatPage() {
       }
       setConversations(updatedConversations);
 
-      const currentSelected = updatedConversations.find(c => c.id === selectedConversation?.id) || selectedConversation;
-      
-      if(currentSelected?.call?.active && currentSelected.call.initiator !== user.uid && currentSelected.call.status === 'ringing') {
-        // Incoming call
-        setCallModalOpen(true);
-      } else if (currentSelected?.call?.active && currentSelected.call.status === 'connected') {
-        setCallModalOpen(true);
-      } else if (!currentSelected?.call?.active) {
-        setCallModalOpen(false);
-        if(peerConnection.current) {
-            handleHangUp(true);
-        }
-      }
+      const currentSelectedConv = updatedConversations.find(c => c.id === selectedConversation?.id) || selectedConversation;
 
-      setSelectedConversation(currentSelected);
+      if(currentSelectedConv?.id === selectedConversation?.id) {
+          setSelectedConversation(currentSelectedConv);
+      }
 
       if (updatedConversations.length > 0 && !selectedConversation) {
           const lastConversationId = localStorage.getItem('selectedConversationId');
@@ -223,6 +212,32 @@ export default function ChatPage() {
 
     return () => unsubscribe();
   }, [selectedConversation?.id]);
+  
+  useEffect(() => {
+    const callState = selectedConversation?.call;
+    const isPartOfCall = callState?.active && user?.uid && selectedConversation.members?.includes(user.uid);
+    
+    if (isPartOfCall) {
+        const isRingingForMe = callState.status === 'ringing' && callState.initiator !== user.uid;
+        const isConnected = callState.status === 'connected';
+        const isDialing = callState.status === 'dialing' || (callState.status === 'ringing' && callState.initiator === user.uid);
+
+        if (isRingingForMe || isConnected || isDialing) {
+            setCallModalOpen(true);
+        } else {
+             // call ended, declined, or user hung up
+             if(peerConnection.current) {
+                handleHangUp(true); // silent hangup
+             }
+             setCallModalOpen(false);
+        }
+    } else {
+        if(peerConnection.current) {
+            handleHangUp(true); // silent hangup
+        }
+        setCallModalOpen(false);
+    }
+  }, [selectedConversation?.call, user?.uid])
 
 
   const handleSendMessage = async (e: React.FormEvent) => {
@@ -352,7 +367,7 @@ export default function ChatPage() {
             type: 'private',
             members: [user.uid, newContactId],
             createdAt: serverTimestamp(),
-            call: { active: false }
+            call: { active: false, status: 'ended' }
         });
       }
       await batch.commit();
@@ -392,7 +407,8 @@ export default function ChatPage() {
         setGroupMembers([]);
         setCreateGroupOpen(false);
 
-        const newConv = {id: groupDocRef.id, ...newGroup} as Conversation;
+        // This is not a full Conversation object, but it's enough for selection
+        const newConv = {id: groupDocRef.id, ...newGroup} as unknown as Conversation;
         setConversations(prev => [...prev, newConv]);
         setSelectedConversation(newConv);
 
@@ -418,6 +434,8 @@ export default function ChatPage() {
      if (contact) {
         return { name: contact.name, avatar: contact.avatar };
     }
+    // Fallback for group members who are not in contacts (if logic allows)
+    // For now, this just handles the case where sender data is missing.
     return { 
       name: `User ${senderId.substring(0,4)}`, 
       avatar: `https://picsum.photos/seed/${senderId}/100/100` 
@@ -426,8 +444,9 @@ export default function ChatPage() {
 
   const handleLogout = async () => {
     try {
-      if(peerConnection.current) await handleHangUp(true);
+      if(peerConnection.current) await handleHangUp(false);
       await signOut(auth);
+      // router.push('/'); // The onAuthStateChanged listener will handle this
     } catch (error) {
       console.error("Error signing out:", error);
       toast({
@@ -445,15 +464,14 @@ export default function ChatPage() {
     
     const pc = new RTCPeerConnection(servers);
     
-    localStream.current = await navigator.mediaDevices.getUserMedia({ audio: true });
+    localStream.current = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
     localStream.current.getTracks().forEach(track => {
         pc.addTrack(track, localStream.current!);
     });
 
     const newRemoteStream = new MediaStream();
-    remoteStream.current = newRemoteStream;
-    if (remoteAudioRef.current) {
-      remoteAudioRef.current.srcObject = newRemoteStream;
+    if(remoteAudioRef.current){
+        remoteAudioRef.current.srcObject = newRemoteStream;
     }
     
     pc.ontrack = (event) => {
@@ -464,18 +482,19 @@ export default function ChatPage() {
 
     const callDocRef = doc(db, 'conversations', selectedConversation.id);
     const iceCandidatesColRef = collection(callDocRef, 'iceCandidates');
+    const otherUserId = selectedConversation.members!.find(id => id !== user.uid)!;
 
     pc.onicecandidate = (event) => {
-        event.candidate && addDoc(collection(iceCandidatesColRef, user.uid), event.candidate.toJSON());
+        if (event.candidate) {
+            addDoc(collection(iceCandidatesColRef, user.uid), event.candidate.toJSON());
+        }
     };
 
-    // Listen for remote ICE candidates
-    const otherUserId = selectedConversation.members!.find(id => id !== user.uid)!;
     onSnapshot(collection(iceCandidatesColRef, otherUserId), (snapshot) => {
         snapshot.docChanges().forEach((change) => {
             if (change.type === 'added') {
                 const candidate = new RTCIceCandidate(change.doc.data());
-                pc.addIceCandidate(candidate);
+                pc.addIceCandidate(candidate).catch(e => console.error("Error adding ICE candidate", e));
             }
         });
     });
@@ -485,7 +504,6 @@ export default function ChatPage() {
   
   const handleInitiateCall = async () => {
     if (!selectedConversation || !user) return;
-    setCallModalOpen(true);
     
     const pc = await initializePeerConnection();
     if (!pc) return;
@@ -498,16 +516,12 @@ export default function ChatPage() {
     const offer = { sdp: offerDescription.sdp, type: offerDescription.type };
     await updateDoc(callDocRef, { call: { active: true, initiator: user.uid, offer, status: 'ringing' } });
     
-    // Listen for answer
     onSnapshot(callDocRef, (snapshot) => {
         const data = snapshot.data();
         if (data?.call?.answer && !pc.currentRemoteDescription) {
             const answerDescription = new RTCSessionDescription(data.call.answer);
             pc.setRemoteDescription(answerDescription);
             updateDoc(callDocRef, { 'call.status': 'connected' });
-        }
-         if (!data?.call?.active) {
-            handleHangUp(true);
         }
     });
   };
@@ -521,10 +535,10 @@ export default function ChatPage() {
     
     const callDocRef = doc(db, 'conversations', selectedConversation.id);
     const callSnap = await getDoc(callDocRef);
-    const offer = callSnap.data()?.call?.offer;
+    const callData = callSnap.data()?.call;
     
-    if(offer) {
-        await pc.setRemoteDescription(new RTCSessionDescription(offer));
+    if(callData?.offer) {
+        await pc.setRemoteDescription(new RTCSessionDescription(callData.offer));
         const answerDescription = await pc.createAnswer();
         await pc.setLocalDescription(answerDescription);
 
@@ -550,17 +564,7 @@ export default function ChatPage() {
           const callDocRef = doc(db, 'conversations', selectedConversation.id);
           const callSnap = await getDoc(callDocRef);
           if (callSnap.exists() && callSnap.data().call?.active) {
-            await updateDoc(callDocRef, { call: { active: false } });
-
-            // Clear ICE candidates
-            const batch = writeBatch(db);
-            const iceCandidatesQuery1 = query(collection(callDocRef, 'iceCandidates', user!.uid));
-            const iceCandidatesQuery2 = query(collection(callDocRef, 'iceCandidates', selectedConversation.members!.find(id => id !== user!.uid)!));
-
-            const [snapshot1, snapshot2] = await Promise.all([getDocs(iceCandidatesQuery1), getDocs(iceCandidatesQuery2)]);
-            snapshot1.forEach(doc => batch.delete(doc.ref));
-            snapshot2.forEach(doc => batch.delete(doc.ref));
-            await batch.commit();
+            await updateDoc(callDocRef, { call: { active: false, status: 'ended' } });
           }
       }
   };
@@ -568,8 +572,8 @@ export default function ChatPage() {
   const handleDeclineCall = async () => {
      if (!selectedConversation || !user) return;
      const callDocRef = doc(db, 'conversations', selectedConversation.id);
-     await updateDoc(callDocRef, { 'call.status': 'declined', 'call.active': false });
-     setCallModalOpen(false);
+     await updateDoc(callDocRef, { call: { active: false, status: 'declined' } });
+     setCallModalOpen(false); // Close modal for decliner
   }
 
   const handleToggleMute = () => {
@@ -594,9 +598,11 @@ export default function ChatPage() {
   }
 
   const renderCallModal = () => {
-    if (!selectedConversation?.call?.active) return null;
-    const isInitiator = selectedConversation.call.initiator === user?.uid;
-    const callStatus = selectedConversation.call.status;
+    const callState = selectedConversation?.call;
+    if (!callState?.active) return null;
+
+    const isInitiator = callState.initiator === user?.uid;
+    const callStatus = callState.status;
 
     let title = "Voice Call";
     let content = <div className="h-10 w-10 animate-spin rounded-full border-4 border-primary border-t-transparent mx-auto" />;
@@ -608,7 +614,7 @@ export default function ChatPage() {
     )
 
     if (callStatus === 'ringing' && !isInitiator) {
-        title = `Incoming Call from ${selectedConversation.name}`;
+        title = `Incoming Call from ${selectedConversation?.name}`;
         content = <p>Do you want to accept the call?</p>;
         actions = (
             <>
@@ -623,10 +629,10 @@ export default function ChatPage() {
             </>
         )
     } else if (callStatus === 'ringing' && isInitiator) {
-        title = `Calling ${selectedConversation.name}...`;
+        title = `Calling ${selectedConversation?.name}...`;
         content = <p>Waiting for them to answer.</p>
     } else if (callStatus === 'connected') {
-        title = `On call with ${selectedConversation.name}`;
+        title = `On call with ${selectedConversation?.name}`;
         content = (
             <div className="flex items-center justify-center gap-4">
                 <p>Call is active.</p>
@@ -640,7 +646,7 @@ export default function ChatPage() {
 
     return (
          <AlertDialog open={isCallModalOpen} onOpenChange={setCallModalOpen}>
-            <AlertDialogContent>
+            <AlertDialogContent onEscapeKeyDown={(e) => e.preventDefault()}>
                 <AlertDialogHeader>
                     <AlertDialogTitle>{title}</AlertDialogTitle>
                 </AlertDialogHeader>
@@ -865,7 +871,7 @@ export default function ChatPage() {
              <main className="flex flex-1 items-center justify-center p-4">
                 <div className="text-center">
                     <h2 className="text-2xl font-semibold">Welcome to Cryptochat</h2>
-                    <p className="mt-2 text-muted-foreground">Select a conversation to start chatting.</p>
+                    <p className="mt-2 text-muted-foreground">Select a conversation or create a new one to start chatting.</p>
                 </div>
             </main>
           )}
@@ -876,3 +882,5 @@ export default function ChatPage() {
     </SidebarProvider>
   );
 }
+
+    
