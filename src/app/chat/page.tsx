@@ -1,17 +1,28 @@
 "use client";
 
 import { useState, useEffect } from 'react';
-import { SidebarProvider, Sidebar, SidebarInset, SidebarHeader, SidebarTrigger, SidebarContent, SidebarMenu, SidebarMenuItem, SidebarMenuButton } from '@/components/ui/sidebar';
+import { SidebarProvider, Sidebar, SidebarInset, SidebarHeader, SidebarTrigger, SidebarContent, SidebarMenu, SidebarMenuItem, SidebarMenuButton, SidebarFooter } from '@/components/ui/sidebar';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { MoreVertical, Paperclip, Send } from 'lucide-react';
+import { MoreVertical, Paperclip, Send, Plus, RefreshCw } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { triageNotification } from '@/ai/flows/notification-triage';
+import { generateContactCode } from '@/ai/flows/user-codes';
 import { useToast } from '@/hooks/use-toast';
 import { db } from '@/lib/firebase';
-import { collection, addDoc, query, orderBy, onSnapshot, serverTimestamp, Timestamp } from 'firebase/firestore';
+import { collection, addDoc, query, orderBy, onSnapshot, serverTimestamp, Timestamp, doc, setDoc, getDoc, updateDoc, where, getDocs } from 'firebase/firestore';
+import { Label } from '@/components/ui/label';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog"
 
 
 interface Message {
@@ -23,12 +34,19 @@ interface Message {
   timestamp: Timestamp | null;
 }
 
+// A simple mock user ID. In a real app, this would come from an auth system.
+const CURRENT_USER_ID = "user1";
+
 export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState('');
+  const [contactCode, setContactCode] = useState('');
+  const [addContactCode, setAddContactCode] = useState('');
+  const [isAddContactOpen, setAddContactOpen] = useState(false);
   const { toast } = useToast();
 
   useEffect(() => {
+    // Listen for messages
     const q = query(collection(db, 'messages'), orderBy('timestamp'));
     const unsubscribe = onSnapshot(q, (querySnapshot) => {
       const msgs: Message[] = [];
@@ -37,6 +55,19 @@ export default function ChatPage() {
       });
       setMessages(msgs);
     });
+
+    // Fetch or create user data
+    const userDocRef = doc(db, 'users', CURRENT_USER_ID);
+    const getUserData = async () => {
+      const docSnap = await getDoc(userDocRef);
+      if (docSnap.exists()) {
+        setContactCode(docSnap.data().contactCode);
+      } else {
+        // First time user, create a document and generate a code.
+        handleGenerateCode();
+      }
+    };
+    getUserData();
 
     return () => unsubscribe();
   }, []);
@@ -65,7 +96,6 @@ export default function ChatPage() {
       });
     }
 
-
     try {
       const result = await triageNotification({ messageContent });
       toast({
@@ -83,6 +113,71 @@ export default function ChatPage() {
       });
     }
   };
+  
+  const handleGenerateCode = async () => {
+    try {
+      const result = await generateContactCode();
+      const newCode = result.code;
+      const userDocRef = doc(db, 'users', CURRENT_USER_ID);
+      await setDoc(userDocRef, { contactCode: newCode, contacts: [] }, { merge: true });
+      setContactCode(newCode);
+      toast({
+        title: 'New Code Generated',
+        description: `Your new contact code is: ${newCode}`,
+      });
+    } catch (error) {
+      console.error("Error generating contact code:", error)
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: "Could not generate a new contact code.",
+      })
+    }
+  };
+
+  const handleAddContact = async () => {
+    if (!addContactCode.trim()) return;
+    
+    try {
+      const q = query(collection(db, "users"), where("contactCode", "==", addContactCode));
+      const querySnapshot = await getDocs(q);
+
+      if (querySnapshot.empty) {
+        toast({
+          variant: 'destructive',
+          title: 'Invalid Code',
+          description: 'No user found with that contact code.',
+        });
+        return;
+      }
+      
+      const newContactId = querySnapshot.docs[0].id;
+      const newContactData = querySnapshot.docs[0].data();
+
+      // Add to current user's contacts
+      const userDocRef = doc(db, 'users', CURRENT_USER_ID);
+      const userDoc = await getDoc(userDocRef);
+      const userData = userDoc.data();
+      const updatedContacts = [...(userData?.contacts || []), { id: newContactId, name: newContactData.name || `User ${newContactId}` }];
+      await updateDoc(userDocRef, { contacts: updatedContacts });
+
+      toast({
+        title: 'Contact Added!',
+        description: `You've successfully added the new contact.`,
+      });
+      setAddContactCode('');
+      setAddContactOpen(false);
+
+    } catch (error) {
+       console.error("Error adding contact:", error)
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: "Could not add contact.",
+      })
+    }
+  };
+
 
   return (
     <SidebarProvider>
@@ -122,6 +217,44 @@ export default function ChatPage() {
               </SidebarMenuItem>
             </SidebarMenu>
           </SidebarContent>
+            <SidebarFooter>
+               <Dialog open={isAddContactOpen} onOpenChange={setAddContactOpen}>
+                <DialogTrigger asChild>
+                  <Button variant="outline" className="w-full">
+                    <Plus className="mr-2 h-4 w-4" />
+                    Add Contact
+                  </Button>
+                </DialogTrigger>
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>Add a new contact</DialogTitle>
+                    <DialogDescription>
+                      Enter the unique code of the person you want to chat with.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="grid gap-4 py-4">
+                    <Label htmlFor="contact-code">Contact Code</Label>
+                    <Input
+                      id="contact-code"
+                      value={addContactCode}
+                      onChange={(e) => setAddContactCode(e.target.value)}
+                      placeholder="e.g. blue-tree-123"
+                    />
+                  </div>
+                  <DialogFooter>
+                    <Button onClick={handleAddContact}>Add Contact</Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+              <Card className="p-2">
+                <div className="flex items-center justify-between">
+                    <p className="text-xs text-muted-foreground font-mono truncate">{contactCode || 'loading...'}</p>
+                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={handleGenerateCode}>
+                        <RefreshCw className="h-4 w-4" />
+                    </Button>
+                </div>
+              </Card>
+            </SidebarFooter>
         </Sidebar>
         <SidebarInset className="flex flex-col">
           <header className="flex h-14 items-center justify-between border-b bg-background px-4">
