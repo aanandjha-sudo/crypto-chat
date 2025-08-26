@@ -1,7 +1,7 @@
 
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Sidebar, SidebarInset, SidebarHeader, SidebarTrigger, SidebarContent, SidebarMenu, SidebarMenuItem, SidebarMenuButton, SidebarFooter, useSidebar } from '@/components/ui/sidebar';
 import { SheetTitle } from '@/components/ui/sheet';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -31,6 +31,7 @@ import {
 } from "@/components/ui/dialog"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { ContactList } from '@/components/ContactList';
+import { Skeleton } from '@/components/ui/skeleton';
 
 
 interface Message {
@@ -76,8 +77,63 @@ type CallState = {
 
 type ActiveView = 'chats' | 'contacts' | 'profile';
 
+function ChatSkeleton() {
+    return (
+      <div className="flex h-screen w-full bg-background">
+        <div className="hidden md:flex flex-col gap-4 border-r bg-sidebar p-2">
+            <div className="p-2">
+                <div className="flex items-center gap-2">
+                    <Skeleton className="h-8 w-8 rounded-full" />
+                    <Skeleton className="h-4 w-24" />
+                </div>
+            </div>
+            <div className="flex flex-col gap-2 px-2">
+                {Array.from({ length: 3 }).map((_, i) => (
+                    <Skeleton key={i} className="h-8 w-full rounded" />
+                ))}
+            </div>
+             <div className="mt-auto flex flex-col gap-2 p-2">
+                <Skeleton className="h-8 w-full rounded" />
+                <Skeleton className="h-8 w-full rounded" />
+            </div>
+        </div>
+        <div className="flex-1 flex flex-col">
+            <div className="flex h-14 items-center justify-between border-b bg-background px-4">
+                 <div className="flex items-center gap-2">
+                    <Skeleton className="h-8 w-8 rounded-full md:hidden" />
+                    <Skeleton className="h-8 w-8 rounded-full" />
+                    <div className="flex flex-col gap-1">
+                        <Skeleton className="h-4 w-20" />
+                         <Skeleton className="h-3 w-16" />
+                    </div>
+                 </div>
+                 <Skeleton className="h-8 w-8 rounded-full" />
+            </div>
+            <div className="flex-1 p-4 space-y-4">
+                <div className="flex items-end gap-3">
+                    <Skeleton className="h-8 w-8 rounded-full" />
+                    <Skeleton className="h-16 w-48 rounded-2xl" />
+                </div>
+                <div className="flex flex-row-reverse items-end gap-3">
+                    <Skeleton className="h-8 w-8 rounded-full" />
+                    <Skeleton className="h-12 w-32 rounded-2xl" />
+                </div>
+                 <div className="flex items-end gap-3">
+                    <Skeleton className="h-8 w-8 rounded-full" />
+                    <Skeleton className="h-12 w-56 rounded-2xl" />
+                </div>
+            </div>
+             <div className="border-t bg-background p-4">
+                <Skeleton className="h-10 w-full rounded" />
+             </div>
+        </div>
+      </div>
+    );
+}
+
+
 export default function ChatPage() {
-  const { isMobile } = useSidebar();
+  const { isMobile, setOpenMobile } = useSidebar();
   const [currentUser, setCurrentUser] = useState<UserData | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -192,7 +248,7 @@ export default function ChatPage() {
             console.error("Failed to create new user:", error);
             toast({ variant: 'destructive', title: 'Initialization Failed', description: 'Could not create a new user profile.'});
             setLoading(false);
-            return null;
+            return;
         }
     }
 
@@ -200,7 +256,6 @@ export default function ChatPage() {
     setEditProfileName(user.name);
     setEditProfileAvatar(user.avatar);
     setLoading(false);
-    return user;
   }, [toast]);
 
 
@@ -218,7 +273,9 @@ export default function ChatPage() {
            return;
         }
       }
-      await initializeUser(user);
+      if(user) {
+        await initializeUser(user);
+      }
     });
 
     return () => authUnsubscribe();
@@ -283,7 +340,7 @@ export default function ChatPage() {
     });
 
     return unsubscribe;
-  }, [toast, selectedConversation, activeView]);
+  }, [toast, activeView, selectedConversation]);
 
   useEffect(() => {
     let unsubscribe: Function | null = null;
@@ -305,7 +362,9 @@ export default function ChatPage() {
         setMessages([]);
         return;
     };
-    localStorage.setItem('selectedConversationId', selectedConversation.id);
+    if (selectedConversation) {
+        localStorage.setItem('selectedConversationId', selectedConversation.id);
+    }
 
     const messagesColRef = collection(db, 'conversations', selectedConversation.id, 'messages');
     const q = query(messagesColRef, orderBy('timestamp'));
@@ -343,18 +402,19 @@ export default function ChatPage() {
 
       if (selectedConversation && !isSilent) {
           const callDocRef = doc(db, 'conversations', selectedConversation.id);
-          const callSnap = await getDoc(callDocRef);
-          if (callSnap.exists() && callSnap.data().call?.active) {
-             const batch = writeBatch(db);
-             batch.update(callDocRef, { call: { active: false, status: 'ended', initiator: '' } });
-             
-             await batch.commit();
+          try {
+            const callSnap = await getDoc(callDocRef);
+            if (callSnap.exists() && callSnap.data().call?.active) {
+                await updateDoc(callDocRef, { call: { active: false, status: 'ended', initiator: '' } });
+            }
+          } catch(e) {
+            console.error("Error hanging up call:", e);
           }
       }
   }, [selectedConversation]);
   
   useEffect(() => {
-    if (!selectedConversation || !currentUser) return;
+    if (!selectedConversation?.id || !currentUser?.id) return;
   
     const convDocRef = doc(db, "conversations", selectedConversation.id);
   
@@ -363,7 +423,7 @@ export default function ChatPage() {
       if (!convData) return;
   
       const callState = convData.call as CallState | undefined;
-
+  
       setConversations(prevConvs => prevConvs.map(c => 
         c.id === snapshot.id ? {...c, call: callState} : c
       ));
@@ -395,10 +455,10 @@ export default function ChatPage() {
   
     return () => unsubscribe();
   
-  }, [selectedConversation, currentUser, isCallModalOpen, handleHangUp]);
+  }, [selectedConversation?.id, selectedConversation?.call, currentUser?.id, isCallModalOpen, handleHangUp]);
   
   const setupNotifications = useCallback(async (user: UserData) => {
-    if (typeof window === 'undefined' || !('serviceWorker' in navigator) || !('Notification' in window)) {
+    if (typeof window === 'undefined' || !('serviceWorker' in navigator) || !('Notification' in window) || !app) {
         return;
     }
 
@@ -406,7 +466,7 @@ export default function ChatPage() {
 
     if (Notification.permission === 'granted') {
         try {
-            const currentToken = await getToken(messaging, { vapidKey: 'YOUR_VAPID_KEY' });
+            const currentToken = await getToken(messaging, { vapidKey: 'BPEs3_Xw4Tj2P2T2b5z7_pxM3U9Jg4T3vXv3i8b3h2M7f8Z7Y8Y7S8y7Q8X7w5Z3Y3y1q1' });
             if (currentToken && currentToken !== user.fcmToken) {
                 const userDocRef = doc(db, 'users', user.id);
                 await updateDoc(userDocRef, { fcmToken: currentToken });
@@ -418,16 +478,25 @@ export default function ChatPage() {
         }
     }
 
-    onMessage(messaging, (payload) => {
+    const unsubscribe = onMessage(messaging, (payload) => {
         console.log('Message received. ', payload);
         toast({ title: payload.notification?.title, description: payload.notification?.body });
     });
+    return unsubscribe;
   }, [app, toast]);
 
   useEffect(() => {
+    let unsubscribe: Function | undefined;
     if(currentUser && notificationPermission === 'granted') {
-        setupNotifications(currentUser);
+        setupNotifications(currentUser).then(unsub => {
+          unsubscribe = unsub;
+        });
     }
+     return () => {
+      if (unsubscribe) {
+        unsubscribe();
+      }
+    };
   }, [currentUser, notificationPermission, setupNotifications]);
 
 
@@ -683,23 +752,26 @@ export default function ChatPage() {
     )
   }
   
+  const userProfiles = useMemo(() => {
+    if (!currentUser) return new Map();
+    const profiles = new Map<string, {name: string, avatar: string}>();
+    profiles.set(currentUser.id, {name: currentUser.name, avatar: currentUser.avatar});
+    currentUser.contacts.forEach(contact => {
+        profiles.set(contact.id, {name: contact.name, avatar: contact.avatar});
+    });
+    return profiles;
+  }, [currentUser]);
+
   const getSender = useCallback((senderId: string) => {
-    if (!currentUser) return { name: '?', avatar: '' };
-    if (senderId === currentUser.id) {
-      return { name: currentUser.name, avatar: currentUser.avatar };
+    if (userProfiles.has(senderId)) {
+        return userProfiles.get(senderId)!;
     }
-    
-    const contact = currentUser.contacts.find(c => c.id === senderId);
-     if (contact) {
-        return { name: contact.name, avatar: contact.avatar };
-    }
-    
-    // Fallback for users not in contacts (e.g., in a group chat)
+    // Fallback for users not in contacts (e.g., in a group chat before being added)
     return { 
       name: `User ${senderId.substring(0,4)}`, 
       avatar: `https://picsum.photos/seed/${senderId}/100/100` 
     };
-  }, [currentUser]);
+  }, [userProfiles]);
 
   const handleSwitchAccount = async () => {
     if (!loginCodeInput.trim()) return;
@@ -777,7 +849,7 @@ export default function ChatPage() {
 
   // WebRTC Call Handling
   const initializePeerConnection = useCallback(async () => {
-    if (!selectedConversation || !currentUser) return null;
+    if (!selectedConversation?.id || !currentUser?.id) return null;
     
     const pc = new RTCPeerConnection(servers);
     
@@ -827,7 +899,7 @@ export default function ChatPage() {
     
     peerConnection.current = pc;
     return pc;
-  }, [currentUser, selectedConversation, toast]);
+  }, [currentUser?.id, selectedConversation?.id, selectedConversation?.members, toast]);
   
   const handleInitiateCall = async () => {
     if (!selectedConversation || !currentUser || selectedConversation.type !== 'private') return;
@@ -881,11 +953,11 @@ export default function ChatPage() {
   };
 
   const handleDeclineCall = useCallback(async () => {
-     if (!selectedConversation || !currentUser) return;
+     if (!selectedConversation?.id || !currentUser?.id) return;
      const callDocRef = doc(db, 'conversations', selectedConversation.id);
      await updateDoc(callDocRef, { 'call.status': 'declined', 'call.active': false });
      handleHangUp(true); // silent hangup
-  }, [selectedConversation, currentUser, handleHangUp]);
+  }, [selectedConversation?.id, currentUser?.id, handleHangUp]);
 
   const handleToggleMute = () => {
     if (localStream.current) {
@@ -899,17 +971,13 @@ export default function ChatPage() {
   const handleConversationSelect = (conv: Conversation) => {
     setSelectedConversation(conv);
     setActiveView('chats');
+    if(isMobile) {
+        setOpenMobile(false);
+    }
   }
 
   if (loading) {
-    return (
-      <div className="flex h-screen w-full items-center justify-center bg-background">
-        <div className="flex flex-col items-center gap-4">
-            <div className="h-10 w-10 animate-spin rounded-full border-4 border-primary border-t-transparent" />
-            <p className="text-muted-foreground">Initializing Secure Session...</p>
-        </div>
-      </div>
-    );
+    return <ChatSkeleton />;
   }
 
   const renderCallModal = () => {
@@ -1121,15 +1189,26 @@ export default function ChatPage() {
                      <CardDescription>Enter a private login code to switch to another account.</CardDescription>
                 </CardHeader>
                 <CardContent>
-                    <div className="flex items-center gap-2">
-                        <Input 
-                            id="login-code"
-                            value={loginCodeInput}
-                            onChange={(e) => setLoginCodeInput(e.target.value)}
-                            placeholder="e.g. a1b2c3d4"
-                        />
-                        <Button onClick={handleSwitchAccount}>Switch</Button>
-                    </div>
+                    <Dialog open={isSwitchAccountOpen} onOpenChange={setSwitchAccountOpen}>
+                        <DialogTrigger asChild>
+                            <Button>Switch Account</Button>
+                        </DialogTrigger>
+                        <DialogContent>
+                            <DialogHeader>
+                                <DialogTitle>Switch Account</DialogTitle>
+                                <DialogDescription>Enter a private login code to switch to another account.</DialogDescription>
+                            </DialogHeader>
+                            <div className="flex items-center gap-2">
+                                <Input 
+                                    id="login-code"
+                                    value={loginCodeInput}
+                                    onChange={(e) => setLoginCodeInput(e.target.value)}
+                                    placeholder="e.g. a1b2c3d4"
+                                />
+                                <Button onClick={handleSwitchAccount}>Switch</Button>
+                            </div>
+                        </DialogContent>
+                    </Dialog>
                 </CardContent>
             </Card>
         </main>
@@ -1385,5 +1464,3 @@ export default function ChatPage() {
     </div>
   );
 }
-
-    

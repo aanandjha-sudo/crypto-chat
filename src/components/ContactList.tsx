@@ -2,7 +2,6 @@
 "use client";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import type { Contact } from "@/app/chat/page";
 import { SidebarTrigger } from "./ui/sidebar";
@@ -49,5 +48,3 @@ export function ContactList({ contacts, onSelectContact }: ContactListProps) {
         </>
     );
 }
-
-    
