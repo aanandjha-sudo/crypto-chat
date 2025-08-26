@@ -6,7 +6,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { Paperclip, Send, RefreshCw, Users, User, LogOut, Phone, PhoneOff, Mic, MicOff, Copy } from 'lucide-react';
+import { Paperclip, Send, RefreshCw, Users, User, LogOut, Phone, PhoneOff, Mic, MicOff, Copy, Edit } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { triageNotification } from '@/ai/flows/notification-triage';
 import { generateContactCode } from '@/ai/flows/user-codes';
@@ -95,6 +95,11 @@ export default function ChatPage() {
   const [isRegenerateConfirmOpen, setRegenerateConfirmOpen] = useState(false);
   const [regenerationTimer, setRegenerationTimer] = useState(0);
   const regenerationIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // Profile Editing
+  const [isEditProfileOpen, setEditProfileOpen] = useState(false);
+  const [editProfileName, setEditProfileName] = useState('');
+  const [editProfileAvatar, setEditProfileAvatar] = useState('');
 
   const { toast } = useToast();
 
@@ -134,7 +139,6 @@ export default function ChatPage() {
   
   const createNewUser = useCallback(async () => {
     try {
-      setLoading(true);
       const newUserId = doc(collection(db, 'users')).id;
       const [newContactCode, newLoginCode] = await Promise.all([
           generateUniqueCode('contact'),
@@ -159,8 +163,6 @@ export default function ChatPage() {
       console.error("Failed to create new user:", error);
       toast({ variant: 'destructive', title: 'Initialization Failed', description: 'Could not create a new user profile.'});
       return null;
-    } finally {
-        setLoading(false);
     }
   }, [toast]);
 
@@ -169,18 +171,26 @@ export default function ChatPage() {
     const initializeUser = async () => {
         setLoading(true);
         const userId = localStorage.getItem('currentUserId');
+        let user: UserData | null = null;
+
         if (userId) {
             const userDocRef = doc(db, 'users', userId);
             const docSnap = await getDoc(userDocRef);
             if (docSnap.exists()) {
-                setCurrentUser({ id: docSnap.id, ...docSnap.data() } as UserData);
+                user = { id: docSnap.id, ...docSnap.data() } as UserData;
             } else {
-                const newUser = await createNewUser();
-                setCurrentUser(newUser);
+                // User ID in storage, but no profile in DB -> create new one
+                user = await createNewUser();
             }
         } else {
-            const newUser = await createNewUser();
-            setCurrentUser(newUser);
+             // No user ID in storage -> create new one
+            user = await createNewUser();
+        }
+
+        setCurrentUser(user);
+        if (user) {
+            setEditProfileName(user.name);
+            setEditProfileAvatar(user.avatar);
         }
         setLoading(false);
     };
@@ -190,29 +200,8 @@ export default function ChatPage() {
   const loadConversations = useCallback(async () => {
     if (!currentUser) return;
     
-    setLoading(true);
+    // setLoading(true); // Don't show main loader for conversation refresh
     const loadedConversations: Conversation[] = [];
-    const conversationPromises: Promise<void>[] = [];
-
-    // Create promises for fetching private conversations from contacts
-    currentUser.contacts.forEach(contact => {
-        const conversationId = [currentUser.id, contact.id].sort().join('_');
-        const convDocRef = doc(db, 'conversations', conversationId);
-        const promise = getDoc(convDocRef).then(docSnap => {
-            if (docSnap.exists()) {
-                const convData = docSnap.data();
-                loadedConversations.push({
-                    id: docSnap.id,
-                    type: 'private',
-                    name: contact.name,
-                    avatar: contact.avatar,
-                    members: convData.members,
-                    call: convData.call,
-                });
-            }
-        });
-        conversationPromises.push(promise);
-    });
 
     // Create a promise for fetching group conversations
     const groupQuery = query(collection(db, 'conversations'), where('members', 'array-contains', currentUser.id), where('type', '==', 'group'));
@@ -228,10 +217,28 @@ export default function ChatPage() {
             });
         });
     });
-    conversationPromises.push(groupPromise);
+
+    // Create promises for fetching private conversations from contacts
+    const privateConversationPromises = currentUser.contacts.map(contact => {
+        const conversationId = [currentUser.id, contact.id].sort().join('_');
+        const convDocRef = doc(db, 'conversations', conversationId);
+        return getDoc(convDocRef).then(docSnap => {
+            if (docSnap.exists()) {
+                const convData = docSnap.data();
+                loadedConversations.push({
+                    id: docSnap.id,
+                    type: 'private',
+                    name: contact.name,
+                    avatar: contact.avatar,
+                    members: convData.members,
+                    call: convData.call,
+                });
+            }
+        });
+    });
 
     try {
-        await Promise.all(conversationPromises);
+        await Promise.all([groupPromise, ...privateConversationPromises]);
         
         // Sort conversations or handle as needed
         loadedConversations.sort((a, b) => a.name.localeCompare(b.name));
@@ -251,7 +258,7 @@ export default function ChatPage() {
             description: 'Could not load your conversations.'
         });
     } finally {
-        setLoading(false);
+        // setLoading(false);
     }
   }, [currentUser, selectedConversation, toast]);
 
@@ -259,7 +266,8 @@ export default function ChatPage() {
     if (currentUser) {
         loadConversations();
     }
-  }, [currentUser, loadConversations]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser]);
 
 
   useEffect(() => {
@@ -289,14 +297,20 @@ export default function ChatPage() {
   useEffect(() => {
     if (!selectedConversation || !currentUser) return;
   
-    const callDocRef = doc(db, "conversations", selectedConversation.id);
+    const convDocRef = doc(db, "conversations", selectedConversation.id);
   
-    const unsubscribe = onSnapshot(callDocRef, (snapshot) => {
+    const unsubscribe = onSnapshot(convDocRef, (snapshot) => {
       const convData = snapshot.data();
       if (!convData) return;
   
       const callState = convData.call as CallState | undefined;
 
+      // Update the conversation state in our list
+      setConversations(prevConvs => prevConvs.map(c => 
+        c.id === snapshot.id ? {...c, call: callState} : c
+      ));
+
+      // Update selected conversation if it's the one being changed
       setSelectedConversation(prev => {
         if (!prev || prev.id !== snapshot.id) return prev;
         const needsUpdate = JSON.stringify(prev.call) !== JSON.stringify(callState);
@@ -445,6 +459,50 @@ export default function ChatPage() {
         description: 'Your private code has not been changed.',
     });
   }
+  
+  const handleEditProfile = async () => {
+      if (!editProfileName.trim() || !currentUser) {
+          toast({ variant: 'destructive', title: 'Invalid Name', description: 'Profile name cannot be empty.' });
+          return;
+      }
+
+      try {
+          const userDocRef = doc(db, 'users', currentUser.id);
+          const newAvatar = editProfileAvatar.trim() || `https://picsum.photos/seed/${currentUser.id}/100/100`;
+          await updateDoc(userDocRef, { 
+              name: editProfileName,
+              avatar: newAvatar,
+          });
+          const updatedUser = { ...currentUser, name: editProfileName, avatar: newAvatar };
+          setCurrentUser(updatedUser);
+
+          // Also update contact info in other users' contact lists
+          // This is a "fire-and-forget" operation for simplicity in this app
+          // In a real-world app, you might use a Cloud Function for this
+          const allUsersQuery = query(collection(db, 'users'));
+          getDocs(allUsersQuery).then(snapshot => {
+              const batch = writeBatch(db);
+              snapshot.forEach(userDoc => {
+                  const userData = userDoc.data() as UserData;
+                  const contactIndex = userData.contacts?.findIndex(c => c.id === currentUser.id);
+                  if (contactIndex > -1) {
+                      const updatedContacts = [...userData.contacts];
+                      updatedContacts[contactIndex] = { ...updatedContacts[contactIndex], name: editProfileName, avatar: newAvatar };
+                      batch.update(userDoc.ref, { contacts: updatedContacts });
+                  }
+              });
+              batch.commit().catch(err => console.error("Failed to update contact info for other users", err));
+          });
+
+
+          toast({ title: 'Profile Updated', description: 'Your profile has been successfully updated.' });
+          setEditProfileOpen(false);
+      } catch (error) {
+          console.error('Error updating profile:', error);
+          toast({ variant: 'destructive', title: 'Update Failed', description: 'Could not update your profile.' });
+      }
+  }
+
 
   const handleAddContact = async () => {
     if (!addContactCode.trim() || !currentUser) return;
@@ -742,10 +800,20 @@ export default function ChatPage() {
           const callDocRef = doc(db, 'conversations', selectedConversation.id);
           const callSnap = await getDoc(callDocRef);
           if (callSnap.exists() && callSnap.data().call?.active) {
-             await updateDoc(callDocRef, { call: { active: false, status: 'ended', initiator: '' } });
+             const batch = writeBatch(db);
+             batch.update(callDocRef, { call: { active: false, status: 'ended', initiator: '' } });
+             // Clear ICE candidates
+             const myIceCandidates = collection(callDocRef, 'iceCandidates', currentUser!.id);
+             const otherUserId = selectedConversation.members!.find(id => id !== currentUser!.id)!;
+             const otherIceCandidates = collection(callDocRef, 'iceCandidates', otherUserId);
+             const myCandidatesSnap = await getDocs(myIceCandidates);
+             myCandidatesSnap.forEach(doc => batch.delete(doc.ref));
+             const otherCandidatesSnap = await getDocs(otherIceCandidates);
+             otherCandidatesSnap.forEach(doc => batch.delete(doc.ref));
+             await batch.commit();
           }
       }
-  }, [selectedConversation]);
+  }, [selectedConversation, currentUser]);
 
   const handleDeclineCall = useCallback(async () => {
      if (!selectedConversation || !currentUser) return;
@@ -764,7 +832,7 @@ export default function ChatPage() {
   };
 
 
-  if (loading || !currentUser) {
+  if (loading) {
     return (
       <div className="flex h-screen w-full items-center justify-center bg-background">
         <div className="flex flex-col items-center gap-4">
@@ -855,6 +923,44 @@ export default function ChatPage() {
         </AlertDialogContent>
     </AlertDialog>
   );
+  
+  const renderEditProfileDialog = () => (
+      <Dialog open={isEditProfileOpen} onOpenChange={setEditProfileOpen}>
+          <DialogContent>
+              <DialogHeader>
+                  <DialogTitle>Edit Your Profile</DialogTitle>
+                  <DialogDescription>
+                      Change your display name and avatar URL. Click save when you're done.
+                  </DialogDescription>
+              </DialogHeader>
+              <div className="grid gap-4 py-4">
+                  <div className="grid grid-cols-4 items-center gap-4">
+                      <Label htmlFor="profile-name" className="text-right">Name</Label>
+                      <Input
+                          id="profile-name"
+                          value={editProfileName}
+                          onChange={(e) => setEditProfileName(e.target.value)}
+                          className="col-span-3"
+                      />
+                  </div>
+                  <div className="grid grid-cols-4 items-center gap-4">
+                      <Label htmlFor="profile-avatar" className="text-right">Avatar URL</Label>
+                      <Input
+                          id="profile-avatar"
+                          value={editProfileAvatar}
+                          onChange={(e) => setEditProfileAvatar(e.target.value)}
+                          className="col-span-3"
+                          placeholder="https://example.com/image.png"
+                      />
+                  </div>
+              </div>
+              <DialogFooter>
+                  <Button onClick={handleEditProfile}>Save Changes</Button>
+              </DialogFooter>
+          </DialogContent>
+      </Dialog>
+  );
+
 
   return (
     <SidebarProvider>
@@ -872,33 +978,40 @@ export default function ChatPage() {
                   <span className="text-xs text-muted-foreground font-mono truncate" title={currentUser?.id}>ID: {currentUser?.id.substring(0, 10)}...</span>
                 </div>
               </div>
-                <Dialog open={isSwitchAccountOpen} onOpenChange={setSwitchAccountOpen}>
-                  <DialogTrigger asChild>
-                    <Button variant="ghost" size="icon" className="h-7 w-7 flex-shrink-0">
-                        <LogOut className="h-4 w-4" />
-                    </Button>
-                  </DialogTrigger>
-                  <DialogContent>
-                      <DialogHeader>
-                          <DialogTitle>Switch Account</DialogTitle>
-                          <DialogDescription>
-                              Enter a private login code to switch to another account. Your current session will be replaced.
-                          </DialogDescription>
-                      </DialogHeader>
-                      <div className="grid gap-4 py-4">
-                          <Label htmlFor="login-code">Private Login Code</Label>
-                          <Input 
-                              id="login-code"
-                              value={loginCodeInput}
-                              onChange={(e) => setLoginCodeInput(e.target.value)}
-                              placeholder="e.g. a1b2c3d4"
-                          />
-                      </div>
-                      <DialogFooter>
-                          <Button onClick={handleSwitchAccount}>Switch Account</Button>
-                      </DialogFooter>
-                  </DialogContent>
-                </Dialog>
+                <div className="flex items-center">
+                    <DialogTrigger asChild>
+                        <Button variant="ghost" size="icon" className="h-7 w-7 flex-shrink-0" onClick={() => setEditProfileOpen(true)}>
+                            <Edit className="h-4 w-4" />
+                        </Button>
+                    </DialogTrigger>
+                    <Dialog open={isSwitchAccountOpen} onOpenChange={setSwitchAccountOpen}>
+                      <DialogTrigger asChild>
+                        <Button variant="ghost" size="icon" className="h-7 w-7 flex-shrink-0">
+                            <LogOut className="h-4 w-4" />
+                        </Button>
+                      </DialogTrigger>
+                      <DialogContent>
+                          <DialogHeader>
+                              <DialogTitle>Switch Account</DialogTitle>
+                              <DialogDescription>
+                                  Enter a private login code to switch to another account. Your current session will be replaced.
+                              </DialogDescription>
+                          </DialogHeader>
+                          <div className="grid gap-4 py-4">
+                              <Label htmlFor="login-code">Private Login Code</Label>
+                              <Input 
+                                  id="login-code"
+                                  value={loginCodeInput}
+                                  onChange={(e) => setLoginCodeInput(e.target.value)}
+                                  placeholder="e.g. a1b2c3d4"
+                              />
+                          </div>
+                          <DialogFooter>
+                              <Button onClick={handleSwitchAccount}>Switch Account</Button>
+                          </DialogFooter>
+                      </DialogContent>
+                    </Dialog>
+                </div>
             </div>
           </SidebarHeader>
           <SidebarContent>
@@ -1071,7 +1184,7 @@ export default function ChatPage() {
                 <main className="p-4">
                   <div className="space-y-4">
                     {messages.map((message) => {
-                      const isUser = message.senderId === currentUser.id;
+                      const isUser = message.senderId === currentUser?.id;
                       const sender = getSender(message.senderId);
                       return (
                         <div key={message.id} className={`flex items-end gap-3 ${isUser ? 'flex-row-reverse' : ''}`}>
@@ -1126,6 +1239,7 @@ export default function ChatPage() {
       </div>
       {renderCallModal()}
       {renderRegenDialog()}
+      {renderEditProfileDialog()}
       <audio ref={remoteAudioRef} autoPlay playsInline />
     </SidebarProvider>
   );
