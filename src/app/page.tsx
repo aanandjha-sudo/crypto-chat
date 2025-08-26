@@ -3,6 +3,7 @@
 import { Button } from '@/components/ui/button';
 import { useRouter } from 'next/navigation';
 import { GoogleAuthProvider, signInWithPopup, signInAnonymously } from 'firebase/auth';
+import type { FirebaseError } from 'firebase/app';
 import { auth, db } from '@/lib/firebase';
 import { useToast } from '@/hooks/use-toast';
 import { doc, setDoc, getDoc, query, where, getDocs, collection } from 'firebase/firestore';
@@ -56,10 +57,15 @@ export default function LoginPage() {
       router.push('/chat');
     } catch (error) {
       console.error("Error during Google login:", error);
+      let description = 'Could not sign in with Google. Please try again.';
+      const firebaseError = error as FirebaseError;
+      if (firebaseError.code) {
+        description = firebaseError.message;
+      }
       toast({
         variant: 'destructive',
         title: 'Login Failed',
-        description: 'Could not sign in with Google. Please try again.',
+        description: description,
       });
     }
   };
@@ -87,10 +93,15 @@ export default function LoginPage() {
         router.push('/chat');
     } catch (error) {
         console.error("Error during guest login:", error);
+        let description = 'Could not sign in as a guest. Please try again.';
+        const firebaseError = error as FirebaseError;
+        if (firebaseError.code) {
+            description = firebaseError.message;
+        }
         toast({
             variant: 'destructive',
             title: 'Login Failed',
-            description: 'Could not sign in as a guest. Please try again.',
+            description: description,
         });
     }
   };

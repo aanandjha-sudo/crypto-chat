@@ -17,6 +17,7 @@ import { collection, addDoc, query, orderBy, onSnapshot, serverTimestamp, Timest
 import { Label } from '@/components/ui/label';
 import { Checkbox } from "@/components/ui/checkbox"
 import { onAuthStateChanged, signOut, User as FirebaseUser } from 'firebase/auth';
+import type { FirebaseError } from 'firebase/app';
 import {
   Dialog,
   DialogContent,
@@ -188,7 +189,8 @@ export default function ChatPage() {
       }
     }, (error) => {
         console.error("Error fetching conversations:", error);
-        if (error.code === 'permission-denied') {
+        const firebaseError = error as FirebaseError;
+        if (firebaseError.code === 'permission-denied') {
             toast({
                 variant: 'destructive',
                 title: 'Permission Error',
