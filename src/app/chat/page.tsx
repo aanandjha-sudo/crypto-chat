@@ -8,14 +8,15 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { Paperclip, Send, RefreshCw, Users, User, LogOut, Phone, PhoneOff, Mic, MicOff, Copy, Edit, MessageSquare, Contact, Bell, BellOff, Upload, Coffee } from 'lucide-react';
+import { Send, RefreshCw, Users, User, Phone, PhoneOff, Mic, MicOff, Copy, Edit, MessageSquare, Contact, Bell, BellOff, Upload, Coffee, SmilePlus, Trash2 } from 'lucide-react';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { triageNotification } from '@/ai/flows/notification-triage';
 import { generateContactCode } from '@/ai/flows/user-codes';
 import { generateLoginCode } from '@/ai/flows/user-login-code';
 import { useToast } from '@/hooks/use-toast';
 import { db, auth, app, storage } from '@/lib/firebase';
-import { getStorage, ref as storageRef, uploadBytes, getDownloadURL } from "firebase/storage";
+import { getStorage, ref as storageRef, uploadBytes, getDownloadURL, uploadString } from "firebase/storage";
 import { getMessaging, getToken, onMessage } from "firebase/messaging";
 import { signInAnonymously, onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
 import { collection, addDoc, query, orderBy, onSnapshot, serverTimestamp, Timestamp, doc, setDoc, getDoc, updateDoc, where, getDocs, DocumentData, writeBatch } from 'firebase/firestore';
@@ -33,20 +34,26 @@ import {
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { ContactList } from '@/components/ContactList';
 import { Skeleton } from '@/components/ui/skeleton';
+import { formatDistanceToNow } from 'date-fns';
 
 
 interface Message {
   id: string;
   senderId: string;
   senderName?: string;
-  text: string;
+  text?: string;
   timestamp: Timestamp | null;
+  type: 'text' | 'audio';
+  audioUrl?: string;
+  reactions?: { [key: string]: string[] }; // emoji -> userId[]
 }
 
 export interface Contact {
   id: string;
   name: string;
   avatar: string;
+  status?: 'online' | 'offline';
+  lastSeen?: Timestamp;
 }
 
 interface Conversation {
@@ -66,6 +73,8 @@ export interface UserData {
     loginCode: string;
     contacts: Contact[];
     fcmToken?: string;
+    status?: 'online' | 'offline';
+    lastSeen?: Timestamp;
 }
 
 type CallState = {
@@ -144,7 +153,6 @@ export default function ChatPage() {
   const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null);
   const [activeView, setActiveView] = useState<ActiveView>('chats');
 
-
   // Add Contact states
   const [addContactCode, setAddContactCode] = useState('');
   const [isAddContactOpen, setAddContactOpen] = useState(false);
@@ -172,6 +180,15 @@ export default function ChatPage() {
   
   // Notifications
   const [notificationPermission, setNotificationPermission] = useState<"default" | "granted" | "denied">("default");
+
+  const [isRecording, setIsRecording] = useState(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordingChunksRef = useRef<Blob[]>([]);
+  
+  const [otherUserStatus, setOtherUserStatus] = useState<Contact['status']>('offline');
+  const [otherUserLastSeen, setOtherUserLastSeen] = useState<Timestamp | null>(null);
+
+  const EMOJI_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
 
 
   const { toast } = useToast();
@@ -254,6 +271,13 @@ export default function ChatPage() {
             return;
         }
     }
+    
+    await updateDoc(userDocRef, { status: 'online', lastSeen: serverTimestamp() });
+    
+    window.addEventListener('beforeunload', () => {
+        updateDoc(userDocRef, { status: 'offline', lastSeen: serverTimestamp() });
+    });
+
 
     setCurrentUser(user);
     setEditProfileName(user.name);
@@ -386,6 +410,27 @@ export default function ChatPage() {
     return () => unsubscribe();
   }, [selectedConversation, toast, activeView]);
   
+  useEffect(() => {
+    let unsubscribe: (() => void) | undefined;
+    if (selectedConversation?.type === 'private' && currentUser) {
+      const otherUserId = selectedConversation.members?.find(id => id !== currentUser.id);
+      if (otherUserId) {
+        const userDocRef = doc(db, 'users', otherUserId);
+        unsubscribe = onSnapshot(userDocRef, (docSnap) => {
+          if (docSnap.exists()) {
+            const data = docSnap.data() as UserData;
+            setOtherUserStatus(data.status || 'offline');
+            setOtherUserLastSeen(data.lastSeen || null);
+          }
+        });
+      }
+    } else {
+        setOtherUserStatus('offline');
+        setOtherUserLastSeen(null);
+    }
+    return () => unsubscribe?.();
+  }, [selectedConversation, currentUser]);
+
   const handleHangUp = useCallback(async (isSilent = false) => {
       if(peerConnection.current) {
         peerConnection.current.getSenders().forEach(sender => sender.track?.stop());
@@ -558,6 +603,7 @@ export default function ChatPage() {
         senderName: currentUser.name,
         text: messageContent,
         timestamp: serverTimestamp(),
+        type: 'text',
       });
     } catch (error) {
       console.error('Error sending message:', error);
@@ -585,6 +631,89 @@ export default function ChatPage() {
     }
   };
 
+  const handleStartRecording = async () => {
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaRecorderRef.current = new MediaRecorder(stream);
+        recordingChunksRef.current = [];
+
+        mediaRecorderRef.current.ondataavailable = (event) => {
+            if (event.data.size > 0) {
+                recordingChunksRef.current.push(event.data);
+            }
+        };
+
+        mediaRecorderRef.current.onstop = async () => {
+            const audioBlob = new Blob(recordingChunksRef.current, { type: 'audio/webm' });
+            if (!selectedConversation || !currentUser) return;
+            
+            const audioFileRef = storageRef(storage, `audio/${selectedConversation.id}/${Date.now()}.webm`);
+            try {
+                const snapshot = await uploadBytes(audioFileRef, audioBlob);
+                const audioUrl = await getDownloadURL(snapshot.ref);
+
+                const messagesColRef = collection(db, 'conversations', selectedConversation.id, 'messages');
+                await addDoc(messagesColRef, {
+                    senderId: currentUser.id,
+                    senderName: currentUser.name,
+                    type: 'audio',
+                    audioUrl: audioUrl,
+                    timestamp: serverTimestamp(),
+                });
+                 // Optional: Triage notification for voice messages
+                await triageNotification({
+                    messageContent: "Sent a voice message",
+                    senderName: currentUser.name,
+                    fcmToken: (await getDoc(doc(db, 'users', selectedConversation.members!.find(id => id !== currentUser.id)!))).data()?.fcmToken
+                });
+
+            } catch (error) {
+                console.error("Error uploading/sending voice message:", error);
+                toast({ variant: 'destructive', title: "Upload Failed", description: "Could not send the voice message." });
+            }
+        };
+
+        mediaRecorderRef.current.start();
+        setIsRecording(true);
+    } catch (error) {
+        console.error("Error starting recording:", error);
+        toast({ variant: 'destructive', title: "Mic Error", description: "Could not access microphone. Please check permissions." });
+    }
+  };
+
+  const handleStopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+        mediaRecorderRef.current.stop();
+        setIsRecording(false);
+    }
+  };
+
+  const handleReaction = async (messageId: string, emoji: string) => {
+    if (!selectedConversation || !currentUser) return;
+
+    const messageRef = doc(db, 'conversations', selectedConversation.id, 'messages', messageId);
+    const messageSnap = await getDoc(messageRef);
+
+    if (messageSnap.exists()) {
+        const messageData = messageSnap.data() as Message;
+        const reactions = messageData.reactions || {};
+        const existingReaction = reactions[emoji] || [];
+
+        if (existingReaction.includes(currentUser.id)) {
+            // User is removing their reaction
+            reactions[emoji] = existingReaction.filter(id => id !== currentUser.id);
+            if(reactions[emoji].length === 0) {
+                delete reactions[emoji];
+            }
+        } else {
+            // User is adding a reaction
+            reactions[emoji] = [...existingReaction, currentUser.id];
+        }
+        
+        await updateDoc(messageRef, { reactions });
+    }
+  };
+
   const handleGenerateContactCode = async () => {
     if (!currentUser) return;
     try {
@@ -608,11 +737,7 @@ export default function ChatPage() {
 
   const handleStartRegeneration = () => {
     setRegenerateConfirmOpen(false);
-    setRegenerationTimer(30); // 30 seconds
-    toast({
-        title: 'Regeneration Started',
-        description: 'A new private code will be generated in 30 seconds. You can cancel this process.',
-    });
+    setRegenerationTimer(30);
   };
 
   const handleCancelRegeneration = () => {
@@ -777,7 +902,6 @@ export default function ChatPage() {
     if (userProfiles.has(senderId)) {
         return userProfiles.get(senderId)!;
     }
-    // Fallback for users not in contacts (e.g., in a group chat before being added)
     return { 
       name: `User ${senderId.substring(0,4)}`, 
       avatar: `https://picsum.photos/seed/${senderId}/100/100` 
@@ -800,6 +924,10 @@ export default function ChatPage() {
       const newUserId = userDoc.id;
 
       if(peerConnection.current) await handleHangUp(false);
+
+      if(currentUser) {
+        await updateDoc(doc(db, 'users', currentUser.id), { status: 'offline', lastSeen: serverTimestamp() });
+      }
       
       localStorage.setItem('currentUserId', newUserId);
       
@@ -989,6 +1117,16 @@ export default function ChatPage() {
 
   if (loading) {
     return <ChatSkeleton />;
+  }
+  
+  const getStatusDisplay = () => {
+    if(otherUserStatus === 'online') {
+        return <span className="text-xs text-green-500">Online</span>
+    }
+    if(otherUserLastSeen) {
+        return <span className="text-xs text-muted-foreground">Last seen {formatDistanceToNow(otherUserLastSeen.toDate(), { addSuffix: true })}</span>
+    }
+    return <span className="text-xs text-muted-foreground">Offline</span>
   }
 
   const renderCallModal = () => {
@@ -1388,8 +1526,10 @@ export default function ChatPage() {
                     </Avatar>
                     <div className="flex flex-col">
                       <span className="font-semibold">{selectedConversation.name}</span>
-                      {selectedConversation.type === 'group' && (
+                      {selectedConversation.type === 'group' ? (
                           <span className="text-xs text-muted-foreground">{selectedConversation.members?.length} members</span>
+                      ): (
+                          getStatusDisplay()
                       )}
                     </div>
                   </div>
@@ -1407,7 +1547,7 @@ export default function ChatPage() {
                         const isUser = message.senderId === currentUser?.id;
                         const sender = getSender(message.senderId);
                         return (
-                          <div key={message.id} className={`flex items-end gap-3 ${isUser ? 'flex-row-reverse' : ''}`}>
+                           <div key={message.id} className={`group flex items-end gap-3 ${isUser ? 'flex-row-reverse' : ''}`}>
                              <Avatar className="h-8 w-8">
                                <AvatarImage src={sender?.avatar} alt={sender?.name} data-ai-hint="person" />
                               <AvatarFallback>{sender?.name?.charAt(0) || '?'}</AvatarFallback>
@@ -1416,11 +1556,45 @@ export default function ChatPage() {
                               {selectedConversation.type ==='group' && !isUser && (
                                   <span className="text-xs text-muted-foreground px-3">{sender.name}</span>
                               )}
-                              <Card className={`rounded-2xl p-3 max-w-sm md:max-w-md ${isUser ? 'bg-primary text-primary-foreground' : 'bg-muted'}`}>
-                                <CardContent className="p-0">
-                                  <p className="text-sm">{message.text}</p>
-                                </CardContent>
-                              </Card>
+                              <div className="relative">
+                                <Card className={`rounded-2xl p-3 max-w-sm md:max-w-md ${isUser ? 'bg-primary text-primary-foreground' : 'bg-muted'}`}>
+                                    <CardContent className="p-0">
+                                        {message.type === 'audio' && message.audioUrl ? (
+                                            <audio controls src={message.audioUrl} className="max-w-full"></audio>
+                                        ) : (
+                                            <p className="text-sm">{message.text}</p>
+                                        )}
+                                    </CardContent>
+                                </Card>
+                                <Popover>
+                                    <PopoverTrigger asChild>
+                                        <Button variant="ghost" size="icon" className={`absolute -top-4 h-7 w-7 rounded-full opacity-0 group-hover:opacity-100 transition-opacity ${isUser ? '-left-4' : '-right-4'}`}>
+                                            <SmilePlus className="h-4 w-4" />
+                                        </Button>
+                                    </PopoverTrigger>
+                                    <PopoverContent className="p-1 w-fit">
+                                        <div className="flex gap-1">
+                                            {EMOJI_REACTIONS.map(emoji => (
+                                                <Button key={emoji} variant="ghost" size="icon" className="h-8 w-8 rounded-full" onClick={() => handleReaction(message.id, emoji)}>
+                                                    {emoji}
+                                                </Button>
+                                            ))}
+                                        </div>
+                                    </PopoverContent>
+                                </Popover>
+                              </div>
+                              {message.reactions && Object.keys(message.reactions).length > 0 && (
+                                <div className="flex gap-1 flex-wrap px-2">
+                                  {Object.entries(message.reactions).map(([emoji, userIds]) => (
+                                    userIds.length > 0 && (
+                                      <div key={emoji} className="flex items-center gap-1 text-xs rounded-full bg-muted border px-2 py-0.5">
+                                        <span>{emoji}</span>
+                                        <span>{userIds.length}</span>
+                                      </div>
+                                    )
+                                  ))}
+                                </div>
+                              )}
                             </div>
                           </div>
                         )
@@ -1431,14 +1605,23 @@ export default function ChatPage() {
                   <form onSubmit={handleSendMessage} className="relative">
                     <Input
                       placeholder="Type a message..."
-                      className="pr-24"
+                      className="pr-16"
                       value={newMessage}
                       onChange={(e) => setNewMessage(e.target.value)}
                     />
                     <div className="absolute inset-y-0 right-0 flex items-center">
-                      <Button variant="ghost" size="icon" type="button">
-                        <Paperclip className="h-5 w-5" />
-                      </Button>
+                       <Button 
+                          variant="ghost" 
+                          size="icon" 
+                          type="button" 
+                          onMouseDown={handleStartRecording} 
+                          onMouseUp={handleStopRecording} 
+                          onTouchStart={handleStartRecording} 
+                          onTouchEnd={handleStopRecording}
+                          className={isRecording ? 'text-red-500' : ''}
+                        >
+                          <Mic className="h-5 w-5" />
+                       </Button>
                       <Button variant="ghost" size="icon" type="submit">
                         <Send className="h-5 w-5" />
                       </Button>
