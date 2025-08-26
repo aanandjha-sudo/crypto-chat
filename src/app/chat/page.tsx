@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from 'react';
@@ -251,15 +252,13 @@ export default function ChatPage() {
             
         setConversations(loadedConversations);
 
-        if (loadedConversations.length > 0) {
-            const lastConversationId = localStorage.getItem('selectedConversationId');
-            const currentSelected = loadedConversations.find(c => c.id === selectedConversation?.id);
-            const lastSelected = loadedConversations.find(c => c.id === lastConversationId);
-            
-            if (!currentSelected && activeView === 'chats') {
-              setSelectedConversation(lastSelected || loadedConversations[0]);
-            }
-        } else {
+        if (loadedConversations.length > 0 && !selectedConversation) {
+             const lastConversationId = localStorage.getItem('selectedConversationId');
+             const lastSelected = loadedConversations.find(c => c.id === lastConversationId);
+             if (activeView === 'chats') {
+                setSelectedConversation(lastSelected || loadedConversations[0]);
+             }
+        } else if (loadedConversations.length === 0) {
             setSelectedConversation(null);
         }
     }, (error) => {
@@ -386,6 +385,29 @@ export default function ChatPage() {
   
   }, [selectedConversation, currentUser, isCallModalOpen, handleHangUp]);
 
+  const performCodeRegeneration = useCallback(async () => {
+      if (!currentUser) return;
+       try {
+        const newCode = await generateUniqueCode('login');
+        const userDocRef = doc(db, 'users', currentUser.id);
+        await updateDoc(userDocRef, { loginCode: newCode });
+        setCurrentUser(prev => prev ? {...prev, loginCode: newCode} : null);
+        toast({
+          title: 'Private Code Regenerated',
+          description: `Your new private login code is: ${newCode}`,
+        });
+      } catch (error) {
+        console.error("Error regenerating login code:", error);
+        toast({
+          variant: "destructive",
+          title: "Error",
+          description: "Could not regenerate your private code.",
+        });
+      } finally {
+        setRegenerateConfirmOpen(false);
+      }
+  }, [currentUser, toast]);
+
   // Regeneration Timer effect
   useEffect(() => {
     if (regenerationTimer > 0) {
@@ -402,8 +424,7 @@ export default function ChatPage() {
         clearInterval(regenerationIntervalRef.current);
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [regenerationTimer]);
+  }, [regenerationTimer, performCodeRegeneration]);
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -462,29 +483,6 @@ export default function ChatPage() {
       })
     }
   };
-  
-  const performCodeRegeneration = async () => {
-      if (!currentUser) return;
-       try {
-        const newCode = await generateUniqueCode('login');
-        const userDocRef = doc(db, 'users', currentUser.id);
-        await updateDoc(userDocRef, { loginCode: newCode });
-        setCurrentUser(prev => prev ? {...prev, loginCode: newCode} : null);
-        toast({
-          title: 'Private Code Regenerated',
-          description: `Your new private login code is: ${newCode}`,
-        });
-      } catch (error) {
-        console.error("Error regenerating login code:", error);
-        toast({
-          variant: "destructive",
-          title: "Error",
-          description: "Could not regenerate your private code.",
-        });
-      } finally {
-        setRegenerateConfirmOpen(false);
-      }
-  }
 
   const handleStartRegeneration = () => {
     setRegenerateConfirmOpen(false);
@@ -635,24 +633,23 @@ export default function ChatPage() {
     )
   }
   
-  const getSender = (senderId: string) => {
+  const getSender = useCallback((senderId: string) => {
     if (!currentUser) return { name: '?', avatar: '' };
     if (senderId === currentUser.id) {
       return { name: currentUser.name, avatar: currentUser.avatar };
     }
     
-    // This is not fully robust for group chats with non-contacts.
-    // A better approach would be to fetch user profiles by ID when needed.
     const contact = currentUser.contacts.find(c => c.id === senderId);
      if (contact) {
         return { name: contact.name, avatar: contact.avatar };
     }
     
+    // Fallback for users not in contacts (e.g., in a group chat)
     return { 
       name: `User ${senderId.substring(0,4)}`, 
       avatar: `https://picsum.photos/seed/${senderId}/100/100` 
     };
-  }
+  }, [currentUser]);
 
   const handleSwitchAccount = async () => {
     if (!loginCodeInput.trim()) return;
@@ -938,7 +935,7 @@ export default function ChatPage() {
                     <div className="flex items-center gap-4">
                         <Avatar className="h-16 w-16">
                             <AvatarImage src={currentUser?.avatar} alt={currentUser?.name} data-ai-hint="person" />
-                            <AvatarFallback>{currentUser?.name?.charAt(0)}</AvatarFallback>
+                            <AvatarFallback>{currentUser?.name?.charAt(0) || '?'}</AvatarFallback>
                         </Avatar>
                         <div>
                             <p className="text-xl font-semibold">{currentUser?.name}</p>
@@ -1059,7 +1056,7 @@ export default function ChatPage() {
                   <div className="flex items-center gap-2">
                       <Avatar className="h-8 w-8">
                       <AvatarImage src={currentUser?.avatar} alt={currentUser?.name} data-ai-hint="female person" />
-                      <AvatarFallback>{currentUser?.name?.charAt(0)}</AvatarFallback>
+                      <AvatarFallback>{currentUser?.name?.charAt(0) || '?'}</AvatarFallback>
                       </Avatar>
                       <div className="flex flex-col overflow-hidden">
                       <span className="text-sm font-semibold text-foreground truncate">{currentUser?.name}</span>
@@ -1164,7 +1161,7 @@ export default function ChatPage() {
                                   <Label htmlFor={`member-${contact.id}`} className="font-normal flex items-center gap-2">
                                       <Avatar className="h-6 w-6">
                                           <AvatarImage src={contact.avatar} alt={contact.name} data-ai-hint="person" />
-                                          <AvatarFallback>{contact.name.charAt(0)}</AvatarFallback>
+                                          <AvatarFallback>{contact.name.charAt(0) || '?'}</AvatarFallback>
                                       </Avatar>
                                       {contact.name}
                                   </Label>
@@ -1190,7 +1187,7 @@ export default function ChatPage() {
                     <SidebarTrigger className="md:hidden" />
                     <Avatar className="h-8 w-8">
                       <AvatarImage src={selectedConversation.avatar} alt={selectedConversation.name} data-ai-hint={selectedConversation.type === 'group' ? 'group users' : 'person'}/>
-                      <AvatarFallback>{selectedConversation.name.charAt(0)}</AvatarFallback>
+                      <AvatarFallback>{selectedConversation.name.charAt(0) || '?'}</AvatarFallback>
                     </Avatar>
                     <div className="flex flex-col">
                       <span className="font-semibold">{selectedConversation.name}</span>
@@ -1216,7 +1213,7 @@ export default function ChatPage() {
                           <div key={message.id} className={`flex items-end gap-3 ${isUser ? 'flex-row-reverse' : ''}`}>
                              <Avatar className="h-8 w-8">
                                <AvatarImage src={sender?.avatar} alt={sender?.name} data-ai-hint="person" />
-                              <AvatarFallback>{sender?.name?.charAt(0)}</AvatarFallback>
+                              <AvatarFallback>{sender?.name?.charAt(0) || '?'}</AvatarFallback>
                             </Avatar>
                             <div className={`flex flex-col space-y-1 ${isUser ? 'items-end' : 'items-start'}`}>
                               {selectedConversation.type ==='group' && !isUser && (
@@ -1265,7 +1262,7 @@ export default function ChatPage() {
                       <div key={conv.id} onClick={() => handleConversationSelect(conv)} className="flex items-center gap-3 p-4 cursor-pointer hover:bg-muted border-b">
                           <Avatar className="h-10 w-10">
                               <AvatarImage src={conv.avatar} alt={conv.name} />
-                              <AvatarFallback>{conv.name.charAt(0)}</AvatarFallback>
+                              <AvatarFallback>{conv.name.charAt(0) || '?'}</AvatarFallback>
                           </Avatar>
                           <div className="flex-1">
                               <p className="font-semibold">{conv.name}</p>
@@ -1299,3 +1296,5 @@ export default function ChatPage() {
     </div>
   );
 }
+
+    
