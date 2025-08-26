@@ -1,0 +1,105 @@
+import { SidebarProvider, Sidebar, SidebarInset, SidebarHeader, SidebarTrigger, SidebarContent, SidebarMenu, SidebarMenuItem, SidebarMenuButton } from '@/components/ui/sidebar';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { Card, CardContent } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
+import { MoreVertical, Paperclip, Send } from 'lucide-react';
+
+export default function ChatPage() {
+  return (
+    <SidebarProvider>
+      <div className="flex min-h-screen bg-background">
+        <Sidebar>
+          <SidebarHeader>
+            <div className="flex items-center gap-2">
+              <Avatar className="h-8 w-8">
+                <AvatarImage src="https://picsum.photos/100/100" alt="User Avatar" data-ai-hint="female person" />
+                <AvatarFallback>U</AvatarFallback>
+              </Avatar>
+              <div className="flex flex-col">
+                <span className="text-sm font-semibold text-foreground">User</span>
+                <span className="text-xs text-muted-foreground">user@email.com</span>
+              </div>
+            </div>
+          </SidebarHeader>
+          <SidebarContent>
+            <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton tooltip="Alice" isActive={true}>
+                  <Avatar className="h-8 w-8">
+                    <AvatarImage src="https://picsum.photos/100/100" alt="Alice" data-ai-hint="woman person" />
+                    <AvatarFallback>A</AvatarFallback>
+                  </Avatar>
+                  <span className="truncate">Alice</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton tooltip="Bob">
+                  <Avatar className="h-8 w-8">
+                    <AvatarImage src="https://picsum.photos/101/101" alt="Bob" data-ai-hint="man person" />
+                    <AvatarFallback>B</AvatarFallback>
+                  </Avatar>
+                  <span className="truncate">Bob</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </SidebarContent>
+        </Sidebar>
+        <SidebarInset className="flex flex-col">
+          <header className="flex h-14 items-center justify-between border-b bg-background px-4">
+            <div className="flex items-center gap-2">
+              <SidebarTrigger className="md:hidden" />
+              <Avatar className="h-8 w-8">
+                <AvatarImage src="https://picsum.photos/100/100" alt="Alice" data-ai-hint="woman person"/>
+                <AvatarFallback>A</AvatarFallback>
+              </Avatar>
+              <span className="font-semibold">Alice</span>
+            </div>
+            <Button variant="ghost" size="icon">
+              <MoreVertical className="h-5 w-5" />
+            </Button>
+          </header>
+          <main className="flex-1 overflow-y-auto p-4">
+            <div className="space-y-4">
+              <div className="flex items-start gap-3">
+                <Avatar className="h-8 w-8">
+                  <AvatarImage src="https://picsum.photos/100/100" alt="Alice" data-ai-hint="woman person"/>
+                  <AvatarFallback>A</AvatarFallback>
+                </Avatar>
+                <Card className="rounded-2xl bg-muted p-3">
+                  <CardContent className="p-0">
+                    <p className="text-sm">Hey, how is it going?</p>
+                  </CardContent>
+                </Card>
+              </div>
+              <div className="flex flex-row-reverse items-start gap-3">
+                <Avatar className="h-8 w-8">
+                  <AvatarImage src="https://picsum.photos/100/100" alt="User Avatar" data-ai-hint="female person"/>
+                  <AvatarFallback>U</AvatarFallback>
+                </Avatar>
+                <Card className="rounded-2xl bg-primary text-primary-foreground p-3">
+                  <CardContent className="p-0">
+                    <p className="text-sm">Pretty good! Just working on this new app.</p>
+                  </CardContent>
+                </Card>
+              </div>
+            </div>
+          </main>
+          <footer className="border-t bg-background p-4">
+            <div className="relative">
+              <Input placeholder="Type a message..." className="pr-24" />
+              <div className="absolute inset-y-0 right-0 flex items-center">
+                <Button variant="ghost" size="icon">
+                  <Paperclip className="h-5 w-5" />
+                </Button>
+                <Button variant="ghost" size="icon">
+                  <Send className="h-5 w-5" />
+                </Button>
+              </div>
+            </div>
+          </footer>
+        </SidebarInset>
+      </div>
+    </SidebarProvider>
+  );
+}
