@@ -8,7 +8,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Card, CardHeader, CardContent, CardTitle, CardDescription } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { Send, RefreshCw, Users, User, Phone, PhoneOff, Mic, MicOff, Copy, Edit, MessageSquare, Contact, Bell, BellOff, Upload, Coffee, SmilePlus, Trash2, Paperclip, File, Video, Image as ImageIcon, Swords, BrainCircuit } from 'lucide-react';
+import { Send, RefreshCw, Users, User, Phone, PhoneOff, Mic, MicOff, Copy, Edit, MessageSquare, Contact, Bell, BellOff, Upload, Coffee, SmilePlus, Trash2, Paperclip, File, Video, Image as ImageIcon, Swords, BrainCircuit, ArrowLeft } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { triageNotification } from '@/ai/flows/notification-triage';
@@ -39,6 +39,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Progress } from '@/components/ui/progress';
 import { formatDistanceToNow } from 'date-fns';
 import { TicTacToe } from '@/components/TicTacToe';
+import { ConnectFour } from '@/components/ConnectFour';
 
 
 interface Message {
@@ -90,6 +91,7 @@ type CallState = {
 }
 
 type ActiveView = 'chats' | 'contacts' | 'profile' | 'games';
+type ActiveGame = 'tictactoe' | 'connectfour' | null;
 
 function ChatSkeleton() {
     return (
@@ -156,6 +158,7 @@ export default function ChatPage() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null);
   const [activeView, setActiveView] = useState<ActiveView>('chats');
+  const [activeGame, setActiveGame] = useState<ActiveGame>(null);
 
   // Add Contact states
   const [addContactCode, setAddContactCode] = useState('');
@@ -1463,29 +1466,64 @@ export default function ChatPage() {
         </main>
       </>
   );
+  
+  const gameComponents: Record<NonNullable<ActiveGame>, React.ComponentType<any>> = {
+    tictactoe: TicTacToe,
+    connectfour: ConnectFour,
+  };
 
-  const renderGamesView = () => (
+  const renderGamesView = () => {
+    const GameComponent = activeGame ? gameComponents[activeGame] : null;
+
+    return (
       <>
         <header className="flex h-14 items-center border-b bg-background px-4">
           <div className="flex items-center gap-2">
             <SidebarTrigger className="md:hidden" />
-            <h2 className="text-lg font-semibold">Games</h2>
+            {activeGame && (
+                <Button variant="ghost" size="icon" onClick={() => setActiveGame(null)}>
+                    <ArrowLeft />
+                </Button>
+            )}
+            <h2 className="text-lg font-semibold">{activeGame ? `Game On: ${selectedConversation?.name}` : 'Games'}</h2>
           </div>
         </header>
         <main className="flex-1 p-4 md:p-6">
-           {selectedConversation && currentUser ? (
-                 <TicTacToe conversationId={selectedConversation.id} currentUser={currentUser} />
-           ): (
+           {!selectedConversation || !currentUser ? (
                 <Card>
                     <CardHeader>
                         <CardTitle>Select a Conversation</CardTitle>
                         <CardDescription>Please select a private chat from the sidebar to start a game with a contact.</CardDescription>
                     </CardHeader>
                 </Card>
+           ) : GameComponent ? (
+                <GameComponent conversationId={selectedConversation.id} currentUser={currentUser} />
+           ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    <Card className="cursor-pointer hover:bg-muted" onClick={() => setActiveGame('tictactoe')}>
+                        <CardHeader>
+                            <CardTitle>Tic-Tac-Toe</CardTitle>
+                            <CardDescription>The classic game of X's and O's. First to get 3 in a row wins.</CardDescription>
+                        </CardHeader>
+                    </Card>
+                    <Card className="cursor-pointer hover:bg-muted" onClick={() => setActiveGame('connectfour')}>
+                        <CardHeader>
+                            <CardTitle>Connect Four</CardTitle>
+                            <CardDescription>Drop your discs and be the first to get four in a row to win.</CardDescription>
+                        </CardHeader>
+                    </Card>
+                     <Card>
+                        <CardHeader>
+                            <CardTitle>More Games Coming Soon...</CardTitle>
+                            <CardDescription>Stay tuned for more exciting games to play with your friends.</CardDescription>
+                        </CardHeader>
+                    </Card>
+                </div>
            )}
         </main>
       </>
-  );
+    )
+  };
   
   const renderMessageContent = (message: Message) => {
     switch (message.type) {
@@ -1543,7 +1581,7 @@ export default function ChatPage() {
                           <SidebarMenuButton 
                               tooltip="Chats" 
                               isActive={activeView === 'chats'}
-                              onClick={() => setActiveView('chats')}
+                              onClick={() => { setActiveView('chats'); setActiveGame(null); }}
                           >
                               <MessageSquare />
                               <span>Chats</span>
@@ -1553,7 +1591,7 @@ export default function ChatPage() {
                           <SidebarMenuButton 
                               tooltip="Contacts" 
                               isActive={activeView === 'contacts'}
-                              onClick={() => setActiveView('contacts')}
+                              onClick={() => { setActiveView('contacts'); setActiveGame(null); }}
                           >
                               <Contact />
                               <span>Contacts</span>
@@ -1573,7 +1611,7 @@ export default function ChatPage() {
                           <SidebarMenuButton 
                               tooltip="Profile" 
                               isActive={activeView === 'profile'}
-                              onClick={() => setActiveView('profile')}
+                              onClick={() => { setActiveView('profile'); setActiveGame(null); }}
                           >
                               <User />
                               <span>Profile</span>
