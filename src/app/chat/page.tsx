@@ -6,7 +6,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { MoreVertical, Paperclip, Send, Plus, RefreshCw, Users, User, LogOut, Phone, PhoneOff, Mic, MicOff, KeyRound, Copy } from 'lucide-react';
+import { Paperclip, Send, RefreshCw, Users, User, LogOut, Phone, PhoneOff, Mic, MicOff, Copy } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { triageNotification } from '@/ai/flows/notification-triage';
 import { generateContactCode } from '@/ai/flows/user-codes';
@@ -104,7 +104,6 @@ export default function ChatPage() {
   const [isMuted, setMuted] = useState(false);
   const peerConnection = useRef<RTCPeerConnection | null>(null);
   const localStream = useRef<MediaStream | null>(null);
-  const remoteStream = useRef<MediaStream | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement>(null);
   const servers = {
     iceServers: [
@@ -136,6 +135,7 @@ export default function ChatPage() {
   
   const createNewUser = useCallback(async () => {
     try {
+      setLoading(true);
       const newUserId = doc(collection(db, 'users')).id;
       const [newContactCode, newLoginCode] = await Promise.all([
           generateUniqueCode('contact'),
@@ -160,6 +160,8 @@ export default function ChatPage() {
       console.error("Failed to create new user:", error);
       toast({ variant: 'destructive', title: 'Initialization Failed', description: 'Could not create a new user profile.'});
       return null;
+    } finally {
+        setLoading(false);
     }
   }, [toast]);
 
@@ -174,12 +176,10 @@ export default function ChatPage() {
             if (docSnap.exists()) {
                 setCurrentUser({ id: docSnap.id, ...docSnap.data() } as UserData);
             } else {
-                // User ID in storage is invalid, create new user
                 const newUser = await createNewUser();
                 setCurrentUser(newUser);
             }
         } else {
-            // No user ID, create new user
             const newUser = await createNewUser();
             setCurrentUser(newUser);
         }
@@ -226,13 +226,13 @@ export default function ChatPage() {
       }
       setConversations(updatedConversations);
 
-      const currentSelectedConv = updatedConversations.find(c => c.id === selectedConversation?.id) || selectedConversation;
-
-      if(currentSelectedConv?.id === selectedConversation?.id) {
+      const currentSelectedConv = selectedConversation 
+          ? updatedConversations.find(c => c.id === selectedConversation.id)
+          : null;
+      
+      if(currentSelectedConv) {
           setSelectedConversation(currentSelectedConv);
-      }
-
-      if (updatedConversations.length > 0 && !selectedConversation) {
+      } else if (updatedConversations.length > 0 && !selectedConversation) {
           const lastConversationId = localStorage.getItem('selectedConversationId');
           const lastConv = updatedConversations.find(c => c.id === lastConversationId);
           setSelectedConversation(lastConv || updatedConversations[0]);
@@ -283,16 +283,15 @@ export default function ChatPage() {
       const convData = snapshot.data();
       if (!convData) return;
   
-      setSelectedConversation(prev => {
-        if (!prev || prev.id !== snapshot.id) return prev;
-        const updatedCallState = convData.call;
-        const needsUpdate = JSON.stringify(prev.call) !== JSON.stringify(updatedCallState);
-        return needsUpdate ? { ...prev, call: updatedCallState } : prev;
-      });
-  
       const callState = convData.call as CallState | undefined;
       const isPartOfCall = callState?.active && convData.members?.includes(currentUser.id);
-  
+      
+      setSelectedConversation(prev => {
+        if (!prev || prev.id !== snapshot.id) return prev;
+        const needsUpdate = JSON.stringify(prev.call) !== JSON.stringify(callState);
+        return needsUpdate ? { ...prev, call: callState } : prev;
+      });
+
       if (isPartOfCall) {
         const isRingingForMe = callState.status === 'ringing' && callState.initiator !== currentUser.id;
         const isConnected = callState.status === 'connected';
@@ -302,13 +301,13 @@ export default function ChatPage() {
             if (!isCallModalOpen) setCallModalOpen(true);
         } else {
             if (peerConnection.current) {
-              handleHangUp(true);
+              handleHangUp(true); // silent hangup
             }
             if(isCallModalOpen) setCallModalOpen(false);
         }
       } else {
         if (peerConnection.current) {
-          handleHangUp(true);
+          handleHangUp(true); // silent hangup
         }
         if(isCallModalOpen) setCallModalOpen(false);
       }
@@ -327,7 +326,6 @@ export default function ChatPage() {
     } else if (regenerationTimer === 0 && regenerationIntervalRef.current) {
       clearInterval(regenerationIntervalRef.current);
       regenerationIntervalRef.current = null;
-      // The timer has finished, now perform the regeneration
       performCodeRegeneration();
     }
     return () => {
@@ -487,7 +485,7 @@ export default function ChatPage() {
             type: 'private',
             members: [currentUser.id, newContactId],
             createdAt: serverTimestamp(),
-            call: { active: false, status: 'ended' }
+            call: { active: false, status: 'ended', initiator: '' }
         });
       }
       await batch.commit();
@@ -553,6 +551,11 @@ export default function ChatPage() {
      if (contact) {
         return { name: contact.name, avatar: contact.avatar };
     }
+    // Fallback for users not in contacts (e.g. in a group chat)
+    const conversationMember = conversations
+        .flatMap(c => c.members)
+        .find(mId => mId === senderId);
+
     return { 
       name: `User ${senderId.substring(0,4)}`, 
       avatar: `https://picsum.photos/seed/${senderId}/100/100` 
@@ -560,7 +563,7 @@ export default function ChatPage() {
   }
 
   const handleSwitchAccount = async () => {
-    if (!loginCodeInput.trim()) return;
+    if (!loginCodeInput.trim() || !currentUser) return;
 
     try {
       const q = query(collection(db, 'users'), where('loginCode', '==', loginCodeInput));
@@ -577,13 +580,20 @@ export default function ChatPage() {
       if(peerConnection.current) await handleHangUp(false);
       
       localStorage.setItem('currentUserId', newUserId);
-      setCurrentUser({ id: newUserId, ...userDoc.data() } as UserData);
-      setSelectedConversation(null); // Reset conversation
-      setMessages([]);
-      setConversations([]);
+      
       setLoginCodeInput('');
       setSwitchAccountOpen(false);
-      toast({ title: 'Account Switched', description: 'Successfully logged in to the new account.' });
+      
+      // Reset state before reload to avoid stale data
+      setCurrentUser(null);
+      setSelectedConversation(null);
+      setMessages([]);
+      setConversations([]);
+
+      toast({ title: 'Account Switched', description: 'Successfully logged in. Reloading...' });
+      
+      // Force a reload to ensure a clean state
+      window.location.reload();
       
     } catch(error) {
       console.error("Error switching account:", error);
@@ -602,19 +612,22 @@ export default function ChatPage() {
 
 
   // WebRTC Call Handling
-  const initializePeerConnection = async () => {
+  const initializePeerConnection = useCallback(async () => {
     if (!selectedConversation || !currentUser) return null;
     
-    if (peerConnection.current) {
-        peerConnection.current.close();
-    }
-
     const pc = new RTCPeerConnection(servers);
     
-    localStream.current = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-    localStream.current.getTracks().forEach(track => {
-        pc.addTrack(track, localStream.current!);
-    });
+    try {
+      localStream.current = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      localStream.current.getTracks().forEach(track => {
+          pc.addTrack(track, localStream.current!);
+      });
+    } catch (error) {
+        console.error("Error getting user media", error);
+        toast({ variant: 'destructive', title: "Microphone Error", description: "Could not access your microphone."})
+        return null;
+    }
+
 
     const newRemoteStream = new MediaStream();
     if(remoteAudioRef.current){
@@ -645,16 +658,16 @@ export default function ChatPage() {
             }
         });
     });
-
+    
+    peerConnection.current = pc;
     return pc;
-  }
+  }, [currentUser, selectedConversation, toast]);
   
   const handleInitiateCall = async () => {
     if (!selectedConversation || !currentUser) return;
     
     const pc = await initializePeerConnection();
     if (!pc) return;
-    peerConnection.current = pc;
 
     const callDocRef = doc(db, 'conversations', selectedConversation.id);
     const offerDescription = await pc.createOffer();
@@ -665,10 +678,13 @@ export default function ChatPage() {
     
     onSnapshot(callDocRef, (snapshot) => {
         const data = snapshot.data();
-        if (data?.call?.answer && !pc.currentRemoteDescription) {
+        if (data?.call?.answer && pc.signalingState === "have-local-offer") {
             const answerDescription = new RTCSessionDescription(data.call.answer);
-            pc.setRemoteDescription(answerDescription);
-            updateDoc(callDocRef, { 'call.status': 'connected' });
+            pc.setRemoteDescription(answerDescription)
+              .then(() => {
+                updateDoc(callDocRef, { 'call.status': 'connected' });
+              })
+              .catch(e => console.error("Error setting remote description", e));
         }
     });
   };
@@ -678,23 +694,27 @@ export default function ChatPage() {
 
     const pc = await initializePeerConnection();
     if (!pc) return;
-    peerConnection.current = pc;
     
     const callDocRef = doc(db, 'conversations', selectedConversation.id);
     const callSnap = await getDoc(callDocRef);
     const callData = callSnap.data()?.call;
     
     if(callData?.offer) {
+      try {
         await pc.setRemoteDescription(new RTCSessionDescription(callData.offer));
         const answerDescription = await pc.createAnswer();
         await pc.setLocalDescription(answerDescription);
 
         const answer = { type: answerDescription.type, sdp: answerDescription.sdp };
         await updateDoc(callDocRef, { 'call.answer': answer, 'call.status': 'connected' });
+      } catch (error) {
+        console.error("Error answering call: ", error);
+        toast({variant: 'destructive', title: 'Call Error', description: 'Failed to connect the call.'})
+      }
     }
   };
 
-  const handleHangUp = async (isSilent = false) => {
+  const handleHangUp = useCallback(async (isSilent = false) => {
       if(peerConnection.current) {
         peerConnection.current.getSenders().forEach(sender => sender.track?.stop());
         peerConnection.current.close();
@@ -709,21 +729,22 @@ export default function ChatPage() {
       }
       
       setCallModalOpen(false);
+      setMuted(false);
 
       if (selectedConversation && !isSilent) {
           const callDocRef = doc(db, 'conversations', selectedConversation.id);
           const callSnap = await getDoc(callDocRef);
           if (callSnap.exists() && callSnap.data().call?.active) {
-            await updateDoc(callDocRef, { call: { active: false, status: 'ended' } });
+            await updateDoc(callDocRef, { call: { active: false, status: 'ended', initiator: '' } });
           }
       }
-  };
+  }, [selectedConversation]);
 
   const handleDeclineCall = async () => {
      if (!selectedConversation || !currentUser) return;
      const callDocRef = doc(db, 'conversations', selectedConversation.id);
-     await updateDoc(callDocRef, { call: { active: false, status: 'declined' } });
-     setCallModalOpen(false);
+     await updateDoc(callDocRef, { call: { active: false, status: 'declined', initiator: '' } });
+     handleHangUp(true);
   }
 
   const handleToggleMute = () => {
@@ -761,7 +782,7 @@ export default function ChatPage() {
           <PhoneOff className="mr-2 h-4 w-4" />
           Hang Up
         </Button>
-    )
+    );
 
     if (callStatus === 'ringing' && !isInitiator) {
         title = `Incoming Call from ${selectedConversation?.name}`;
@@ -795,16 +816,14 @@ export default function ChatPage() {
 
 
     return (
-         <AlertDialog open={isCallModalOpen}>
+         <AlertDialog open={isCallModalOpen} onOpenChange={setCallModalOpen}>
             <AlertDialogContent onEscapeKeyDown={(e) => e.preventDefault()}>
                 <AlertDialogHeader>
-                    <AlertDialogTitle>{title}</AlertDialogTitle>
+                    <AlertDialogTitle className="text-center">{title}</AlertDialogTitle>
                 </AlertDialogHeader>
-                <AlertDialogDescription asChild>
-                    <div className="text-center my-4">
-                        {content}
-                    </div>
-                </AlertDialogDescription>
+                <div className="text-center my-4 text-muted-foreground">
+                    {content}
+                </div>
                 <AlertDialogFooter className="sm:justify-center">
                     {actions}
                 </AlertDialogFooter>
@@ -841,14 +860,14 @@ export default function ChatPage() {
                   <AvatarImage src={currentUser?.avatar} alt={currentUser?.name} data-ai-hint="female person" />
                   <AvatarFallback>{currentUser?.name?.charAt(0)}</AvatarFallback>
                 </Avatar>
-                <div className="flex flex-col">
-                  <span className="text-sm font-semibold text-foreground">{currentUser?.name}</span>
-                  <span className="text-xs text-muted-foreground font-mono truncate">ID: {currentUser?.id}</span>
+                <div className="flex flex-col overflow-hidden">
+                  <span className="text-sm font-semibold text-foreground truncate">{currentUser?.name}</span>
+                  <span className="text-xs text-muted-foreground font-mono truncate" title={currentUser?.id}>ID: {currentUser?.id.substring(0, 10)}...</span>
                 </div>
               </div>
                 <Dialog open={isSwitchAccountOpen} onOpenChange={setSwitchAccountOpen}>
                   <DialogTrigger asChild>
-                    <Button variant="ghost" size="icon" className="h-7 w-7">
+                    <Button variant="ghost" size="icon" className="h-7 w-7 flex-shrink-0">
                         <LogOut className="h-4 w-4" />
                     </Button>
                   </DialogTrigger>
@@ -1035,13 +1054,10 @@ export default function ChatPage() {
                 </div>
                 <div>
                    {selectedConversation.type === 'private' && (
-                    <Button variant="ghost" size="icon" onClick={handleInitiateCall} disabled={selectedConversation.call?.active}>
+                    <Button variant="ghost" size="icon" onClick={handleInitiateCall} disabled={selectedConversation.call?.active && selectedConversation.call?.status !== 'ended'}>
                         <Phone className="h-5 w-5" />
                     </Button>
                    )}
-                   <Button variant="ghost" size="icon">
-                     <MoreVertical className="h-5 w-5" />
-                   </Button>
                 </div>
               </header>
               <ScrollArea className="flex-1">
@@ -1107,3 +1123,4 @@ export default function ChatPage() {
     </SidebarProvider>
   );
 }
+
