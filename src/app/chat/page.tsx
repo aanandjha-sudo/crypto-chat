@@ -6,7 +6,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { MoreVertical, Paperclip, Send, Plus, RefreshCw } from 'lucide-react';
+import { MoreVertical, Paperclip, Send, Plus, RefreshCw, Users, User } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { triageNotification } from '@/ai/flows/notification-triage';
 import { generateContactCode } from '@/ai/flows/user-codes';
@@ -14,6 +14,7 @@ import { useToast } from '@/hooks/use-toast';
 import { db } from '@/lib/firebase';
 import { collection, addDoc, query, orderBy, onSnapshot, serverTimestamp, Timestamp, doc, setDoc, getDoc, updateDoc, where, getDocs, DocumentData } from 'firebase/firestore';
 import { Label } from '@/components/ui/label';
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog,
   DialogContent,
@@ -28,6 +29,7 @@ import {
 interface Message {
   id: string;
   senderId: string;
+  senderName?: string;
   text: string;
   timestamp: Timestamp | null;
 }
@@ -36,6 +38,14 @@ interface Contact {
   id: string;
   name: string;
   avatar: string;
+}
+
+interface Conversation {
+    id: string;
+    type: 'private' | 'group';
+    name: string;
+    avatar: string;
+    members?: string[];
 }
 
 interface UserData {
@@ -53,45 +63,90 @@ export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const [userData, setUserData] = useState<UserData | null>(null);
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null);
+
+  // Add Contact states
   const [addContactCode, setAddContactCode] = useState('');
   const [isAddContactOpen, setAddContactOpen] = useState(false);
-  const [selectedContact, setSelectedContact] = useState<Contact | null>(null);
+  
+  // Create Group states
+  const [isCreateGroupOpen, setCreateGroupOpen] = useState(false);
+  const [groupName, setGroupName] = useState('');
+  const [groupMembers, setGroupMembers] = useState<string[]>([]);
+
   const { toast } = useToast();
-
-  const conversationId = useMemo(() => {
-    if (!selectedContact) return null;
-    // Create a consistent conversation ID between two users
-    return [CURRENT_USER_ID, selectedContact.id].sort().join('_');
-  }, [selectedContact]);
-
 
   useEffect(() => {
     // Fetch or create user data
     const userDocRef = doc(db, 'users', CURRENT_USER_ID);
     const getUserData = async () => {
-      const docSnap = await getDoc(userDocRef);
-      if (docSnap.exists()) {
-        const data = docSnap.data() as UserData;
-        setUserData(data);
-        if(data.contacts && data.contacts.length > 0 && !selectedContact) {
-            setSelectedContact(data.contacts[0]);
-        }
-      } else {
-        // First time user, create a document and generate a code.
+      let docSnap = await getDoc(userDocRef);
+      if (!docSnap.exists()) {
+         // First time user, create a document and generate a code.
         const { code } = await generateContactCode();
-        const newUser: UserData = { contactCode: code, contacts: [] };
+        const newUser: UserData & {name: string, avatar: string} = { 
+            contactCode: code, 
+            contacts: [], 
+            name: CURRENT_USER_NAME, 
+            avatar: CURRENT_USER_AVATAR 
+        };
         await setDoc(userDocRef, newUser);
-        setUserData(newUser);
+        docSnap = await getDoc(userDocRef); // re-fetch to get server data
       }
+      
+      const data = docSnap.data() as UserData;
+      setUserData(data);
+
+      // After getting user data, fetch their conversations
+      const convQuery = query(collection(db, 'conversations'), where('members', 'array-contains', CURRENT_USER_ID));
+      const unsubscribeConversations = onSnapshot(convQuery, async (querySnapshot) => {
+        const convs: Conversation[] = [];
+        for (const doc of querySnapshot.docs) {
+            const convData = doc.data();
+            if (convData.type === 'private') {
+                const otherUserId = convData.members.find((id: string) => id !== CURRENT_USER_ID);
+                const otherUserDoc = await getDoc(doc(db, 'users', otherUserId));
+                if (otherUserDoc.exists()) {
+                    const otherUserData = otherUserDoc.data();
+                    convs.push({
+                        id: doc.id,
+                        type: 'private',
+                        name: otherUserData.name || `User ${otherUserId}`,
+                        avatar: otherUserData.avatar || `https://picsum.photos/seed/${otherUserId}/100/100`
+                    });
+                }
+            } else { // group
+                 convs.push({
+                    id: doc.id,
+                    type: 'group',
+                    name: convData.name,
+                    avatar: convData.avatar || `https://picsum.photos/seed/${doc.id}/100/100`,
+                    members: convData.members,
+                });
+            }
+        }
+        setConversations(convs);
+        if (convs.length > 0 && !selectedConversation) {
+            setSelectedConversation(convs[0]);
+        }
+      });
+      return () => unsubscribeConversations();
     };
-    getUserData();
+    
+    const unsubscribe = getUserData();
+    return () => { unsubscribe.then(unsub => unsub && unsub()) };
+
   }, []);
 
   useEffect(() => {
-    if (!conversationId) return;
+    if (!selectedConversation) {
+        setMessages([]);
+        return;
+    };
 
     // Listen for messages in the current conversation
-    const messagesColRef = collection(db, 'conversations', conversationId, 'messages');
+    const messagesColRef = collection(db, 'conversations', selectedConversation.id, 'messages');
     const q = query(messagesColRef, orderBy('timestamp'));
 
     const unsubscribe = onSnapshot(q, (querySnapshot) => {
@@ -103,20 +158,21 @@ export default function ChatPage() {
     });
 
     return () => unsubscribe();
-  }, [conversationId]);
+  }, [selectedConversation]);
 
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (newMessage.trim() === '' || !conversationId) return;
+    if (newMessage.trim() === '' || !selectedConversation) return;
 
     const messageContent = newMessage;
     setNewMessage('');
 
     try {
-      const messagesColRef = collection(db, 'conversations', conversationId, 'messages');
+      const messagesColRef = collection(db, 'conversations', selectedConversation.id, 'messages');
       await addDoc(messagesColRef, {
         senderId: CURRENT_USER_ID,
+        senderName: CURRENT_USER_NAME, // Store sender name for group chats
         text: messageContent,
         timestamp: serverTimestamp(),
       });
@@ -176,11 +232,7 @@ export default function ChatPage() {
       const querySnapshot = await getDocs(q);
 
       if (querySnapshot.empty) {
-        toast({
-          variant: 'destructive',
-          title: 'Invalid Code',
-          description: 'No user found with that contact code.',
-        });
+        toast({ variant: 'destructive', title: 'Invalid Code', description: 'No user found with that contact code.' });
         return;
       }
       
@@ -188,23 +240,14 @@ export default function ChatPage() {
       const newContactId = newContactDoc.id;
       
       if(newContactId === CURRENT_USER_ID) {
-        toast({
-          variant: 'destructive',
-          title: 'Cannot Add Yourself',
-          description: 'You cannot add yourself as a contact.',
-        });
+        toast({ variant: 'destructive', title: 'Cannot Add Yourself', description: 'You cannot add yourself as a contact.' });
         return;
       }
       
       if(userData?.contacts.find(c => c.id === newContactId)) {
-        toast({
-          variant: 'destructive',
-          title: 'Contact Exists',
-          description: 'This user is already in your contact list.',
-        });
+        toast({ variant: 'destructive', title: 'Contact Exists', description: 'This user is already in your contact list.' });
         return;
       }
-
 
       const newContactData = newContactDoc.data();
       const newContact: Contact = { 
@@ -218,24 +261,79 @@ export default function ChatPage() {
       const updatedContacts = [...(userData?.contacts || []), newContact];
       await updateDoc(userDocRef, { contacts: updatedContacts });
       
-      setUserData(prev => prev ? {...prev, contacts: updatedContacts} : null);
+      // Create a new private conversation
+      const conversationId = [CURRENT_USER_ID, newContactId].sort().join('_');
+      const convDocRef = doc(db, 'conversations', conversationId);
+      const convDocSnap = await getDoc(convDocRef);
+      if (!convDocSnap.exists()) {
+        await setDoc(convDocRef, {
+            type: 'private',
+            members: [CURRENT_USER_ID, newContactId],
+            createdAt: serverTimestamp(),
+        });
+      }
 
-      toast({
-        title: 'Contact Added!',
-        description: `You've successfully added ${newContact.name}.`,
-      });
+      setUserData(prev => prev ? {...prev, contacts: updatedContacts} : null);
+      toast({ title: 'Contact Added!', description: `You've successfully added ${newContact.name}.` });
       setAddContactCode('');
       setAddContactOpen(false);
 
     } catch (error) {
        console.error("Error adding contact:", error)
-      toast({
-        variant: "destructive",
-        title: "Error",
-        description: "Could not add contact.",
-      })
+      toast({ variant: "destructive", title: "Error", description: "Could not add contact." })
     }
   };
+
+  const handleCreateGroup = async () => {
+     if (!groupName.trim() || groupMembers.length === 0) {
+        toast({ variant: 'destructive', title: 'Invalid Group', description: 'Group name and at least one member are required.' });
+        return;
+     }
+
+     try {
+        const allMembers = [CURRENT_USER_ID, ...groupMembers];
+        const newGroup = {
+            name: groupName,
+            type: 'group',
+            members: allMembers,
+            createdBy: CURRENT_USER_ID,
+            createdAt: serverTimestamp(),
+            avatar: `https://picsum.photos/seed/${groupName}/100/100`
+        };
+
+        const groupDocRef = await addDoc(collection(db, 'conversations'), newGroup);
+        
+        toast({ title: 'Group Created!', description: `Group "${groupName}" was successfully created.` });
+        setGroupName('');
+        setGroupMembers([]);
+        setCreateGroupOpen(false);
+        // Optional: select the new group
+        setSelectedConversation({id: groupDocRef.id, ...newGroup});
+
+     } catch(error) {
+        console.error("Error creating group:", error);
+        toast({ variant: "destructive", title: "Error", description: "Could not create group." });
+     }
+  }
+  
+  const handleGroupMemberToggle = (contactId: string) => {
+    setGroupMembers(prev => 
+        prev.includes(contactId) 
+            ? prev.filter(id => id !== contactId)
+            : [...prev, contactId]
+    )
+  }
+  
+  const getSender = (senderId: string) => {
+    if (senderId === CURRENT_USER_ID) {
+      return { name: CURRENT_USER_NAME, avatar: CURRENT_USER_AVATAR };
+    }
+    const contact = userData?.contacts.find(c => c.id === senderId);
+    return { 
+      name: contact?.name || `User ${senderId.substring(0,4)}`, 
+      avatar: contact?.avatar || `https://picsum.photos/seed/${senderId}/100/100` 
+    };
+  }
 
 
   return (
@@ -256,53 +354,105 @@ export default function ChatPage() {
           </SidebarHeader>
           <SidebarContent>
             <SidebarMenu>
-              {userData?.contacts.map(contact => (
-                <SidebarMenuItem key={contact.id}>
+              {conversations.map(conv => (
+                <SidebarMenuItem key={conv.id}>
                   <SidebarMenuButton 
-                    tooltip={contact.name} 
-                    isActive={selectedContact?.id === contact.id}
-                    onClick={() => setSelectedContact(contact)}
+                    tooltip={conv.name} 
+                    isActive={selectedConversation?.id === conv.id}
+                    onClick={() => setSelectedConversation(conv)}
                   >
                     <Avatar className="h-8 w-8">
-                      <AvatarImage src={contact.avatar} alt={contact.name} data-ai-hint="person" />
-                      <AvatarFallback>{contact.name.charAt(0)}</AvatarFallback>
+                      <AvatarImage src={conv.avatar} alt={conv.name} data-ai-hint={conv.type === 'group' ? 'group users' : 'person'} />
+                      <AvatarFallback>{conv.name.charAt(0)}</AvatarFallback>
                     </Avatar>
-                    <span className="truncate">{contact.name}</span>
+                    <span className="truncate">{conv.name}</span>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
               ))}
             </SidebarMenu>
           </SidebarContent>
             <SidebarFooter>
-               <Dialog open={isAddContactOpen} onOpenChange={setAddContactOpen}>
-                <DialogTrigger asChild>
-                  <Button variant="outline" className="w-full">
-                    <Plus className="mr-2 h-4 w-4" />
-                    Add Contact
-                  </Button>
-                </DialogTrigger>
-                <DialogContent>
-                  <DialogHeader>
-                    <DialogTitle>Add a new contact</DialogTitle>
-                    <DialogDescription>
-                      Enter the unique code of the person you want to chat with.
-                    </DialogDescription>
-                  </DialogHeader>
-                  <div className="grid gap-4 py-4">
-                    <Label htmlFor="contact-code">Contact Code</Label>
-                    <Input
-                      id="contact-code"
-                      value={addContactCode}
-                      onChange={(e) => setAddContactCode(e.target.value)}
-                      placeholder="e.g. blue-tree-123"
-                    />
-                  </div>
-                  <DialogFooter>
-                    <Button onClick={handleAddContact}>Add Contact</Button>
-                  </DialogFooter>
-                </DialogContent>
-              </Dialog>
-              <Card className="p-2">
+              <div className="flex gap-2">
+                 <Dialog open={isAddContactOpen} onOpenChange={setAddContactOpen}>
+                  <DialogTrigger asChild>
+                    <Button variant="outline" className="w-full">
+                      <User className="mr-2 h-4 w-4" />
+                      Add Contact
+                    </Button>
+                  </DialogTrigger>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>Add a new contact</DialogTitle>
+                      <DialogDescription>
+                        Enter the unique code of the person you want to chat with.
+                      </DialogDescription>
+                    </DialogHeader>
+                    <div className="grid gap-4 py-4">
+                      <Label htmlFor="contact-code">Contact Code</Label>
+                      <Input
+                        id="contact-code"
+                        value={addContactCode}
+                        onChange={(e) => setAddContactCode(e.target.value)}
+                        placeholder="e.g. blue-tree-123"
+                      />
+                    </div>
+                    <DialogFooter>
+                      <Button onClick={handleAddContact}>Add Contact</Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
+                <Dialog open={isCreateGroupOpen} onOpenChange={setCreateGroupOpen}>
+                  <DialogTrigger asChild>
+                    <Button variant="outline" className="w-full">
+                      <Users className="mr-2 h-4 w-4" />
+                      New Group
+                    </Button>
+                  </DialogTrigger>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>Create a new group</DialogTitle>
+                      <DialogDescription>
+                        Give your group a name and add members from your contact list.
+                      </DialogDescription>
+                    </DialogHeader>
+                    <div className="grid gap-4 py-4">
+                      <Label htmlFor="group-name">Group Name</Label>
+                      <Input
+                        id="group-name"
+                        value={groupName}
+                        onChange={(e) => setGroupName(e.target.value)}
+                        placeholder="e.g. My Awesome Team"
+                      />
+                      <Label>Members</Label>
+                       <ScrollArea className="h-40">
+                         <div className="space-y-2">
+                          {userData?.contacts.map(contact => (
+                              <div key={contact.id} className="flex items-center space-x-2">
+                                <Checkbox 
+                                  id={`member-${contact.id}`} 
+                                  onCheckedChange={() => handleGroupMemberToggle(contact.id)}
+                                  checked={groupMembers.includes(contact.id)}
+                                />
+                                <Label htmlFor={`member-${contact.id}`} className="font-normal flex items-center gap-2">
+                                    <Avatar className="h-6 w-6">
+                                        <AvatarImage src={contact.avatar} alt={contact.name} data-ai-hint="person" />
+                                        <AvatarFallback>{contact.name.charAt(0)}</AvatarFallback>
+                                    </Avatar>
+                                    {contact.name}
+                                </Label>
+                              </div>
+                          ))}
+                         </div>
+                       </ScrollArea>
+                    </div>
+                    <DialogFooter>
+                      <Button onClick={handleCreateGroup}>Create Group</Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
+              </div>
+              
+              <Card className="p-2 mt-2">
                 <div className="flex items-center justify-between">
                     <p className="text-xs text-muted-foreground font-mono truncate">{userData?.contactCode || 'loading...'}</p>
                     <Button variant="ghost" size="icon" className="h-7 w-7" onClick={handleGenerateCode}>
@@ -313,16 +463,21 @@ export default function ChatPage() {
             </SidebarFooter>
         </Sidebar>
         <SidebarInset className="flex flex-col">
-          {selectedContact ? (
+          {selectedConversation ? (
             <>
               <header className="flex h-14 items-center justify-between border-b bg-background px-4">
                 <div className="flex items-center gap-2">
                   <SidebarTrigger className="md:hidden" />
                   <Avatar className="h-8 w-8">
-                    <AvatarImage src={selectedContact.avatar} alt={selectedContact.name} data-ai-hint="person"/>
-                    <AvatarFallback>{selectedContact.name.charAt(0)}</AvatarFallback>
+                    <AvatarImage src={selectedConversation.avatar} alt={selectedConversation.name} data-ai-hint={selectedConversation.type === 'group' ? 'group users' : 'person'}/>
+                    <AvatarFallback>{selectedConversation.name.charAt(0)}</AvatarFallback>
                   </Avatar>
-                  <span className="font-semibold">{selectedContact.name}</span>
+                  <div className="flex flex-col">
+                    <span className="font-semibold">{selectedConversation.name}</span>
+                    {selectedConversation.type === 'group' && (
+                        <span className="text-xs text-muted-foreground">{selectedConversation.members?.length} members</span>
+                    )}
+                  </div>
                 </div>
                 <Button variant="ghost" size="icon">
                   <MoreVertical className="h-5 w-5" />
@@ -333,22 +488,23 @@ export default function ChatPage() {
                   <div className="space-y-4">
                     {messages.map((message) => {
                       const isUser = message.senderId === CURRENT_USER_ID;
-                      const contact = isUser ? null : userData?.contacts.find(c => c.id === message.senderId);
+                      const sender = getSender(message.senderId);
                       return (
-                        <div key={message.id} className={`flex items-start gap-3 ${isUser ? 'flex-row-reverse' : ''}`}>
+                        <div key={message.id} className={`flex items-end gap-3 ${isUser ? 'flex-row-reverse' : ''}`}>
                           <Avatar className="h-8 w-8">
-                             <AvatarImage 
-                                src={isUser ? CURRENT_USER_AVATAR : contact?.avatar} 
-                                alt={isUser ? CURRENT_USER_NAME : contact?.name} 
-                                data-ai-hint="person"
-                            />
-                            <AvatarFallback>{(isUser ? CURRENT_USER_NAME : contact?.name || '?').charAt(0)}</AvatarFallback>
+                             <AvatarImage src={sender.avatar} alt={sender.name} data-ai-hint="person" />
+                            <AvatarFallback>{sender.name.charAt(0)}</AvatarFallback>
                           </Avatar>
-                          <Card className={`rounded-2xl p-3 ${isUser ? 'bg-primary text-primary-foreground' : 'bg-muted'}`}>
-                            <CardContent className="p-0">
-                              <p className="text-sm">{message.text}</p>
-                            </CardContent>
-                          </Card>
+                          <div className={`flex flex-col space-y-1 ${isUser ? 'items-end' : 'items-start'}`}>
+                            {selectedConversation.type ==='group' && !isUser && (
+                                <span className="text-xs text-muted-foreground px-3">{message.senderName}</span>
+                            )}
+                            <Card className={`rounded-2xl p-3 max-w-sm md:max-w-md ${isUser ? 'bg-primary text-primary-foreground' : 'bg-muted'}`}>
+                              <CardContent className="p-0">
+                                <p className="text-sm">{message.text}</p>
+                              </CardContent>
+                            </Card>
+                          </div>
                         </div>
                       )
                     })}
@@ -378,7 +534,7 @@ export default function ChatPage() {
              <main className="flex flex-1 items-center justify-center p-4">
                 <div className="text-center">
                     <h2 className="text-2xl font-semibold">Welcome to Cryptochat</h2>
-                    <p className="mt-2 text-muted-foreground">Add a contact to start chatting.</p>
+                    <p className="mt-2 text-muted-foreground">Add a contact or create a group to start chatting.</p>
                 </div>
             </main>
           )}
