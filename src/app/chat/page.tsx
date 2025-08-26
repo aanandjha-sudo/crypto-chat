@@ -1,19 +1,19 @@
 "use client";
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { SidebarProvider, Sidebar, SidebarInset, SidebarHeader, SidebarTrigger, SidebarContent, SidebarMenu, SidebarMenuItem, SidebarMenuButton, SidebarFooter } from '@/components/ui/sidebar';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { MoreVertical, Paperclip, Send, Plus, RefreshCw, Users, User, LogOut } from 'lucide-react';
+import { MoreVertical, Paperclip, Send, Plus, RefreshCw, Users, User, LogOut, Phone, PhoneOff, Mic, MicOff } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { triageNotification } from '@/ai/flows/notification-triage';
 import { generateContactCode } from '@/ai/flows/user-codes';
 import { useToast } from '@/hooks/use-toast';
 import { auth, db } from '@/lib/firebase';
-import { collection, addDoc, query, orderBy, onSnapshot, serverTimestamp, Timestamp, doc, setDoc, getDoc, updateDoc, where, getDocs, DocumentData } from 'firebase/firestore';
+import { collection, addDoc, query, orderBy, onSnapshot, serverTimestamp, Timestamp, doc, setDoc, getDoc, updateDoc, where, getDocs, DocumentData, writeBatch } from 'firebase/firestore';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from "@/components/ui/checkbox"
 import { onAuthStateChanged, signOut, User as FirebaseUser } from 'firebase/auth';
@@ -26,6 +26,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog"
+import { AlertDialog, AlertDialogAction, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 
 
 interface Message {
@@ -48,6 +49,7 @@ interface Conversation {
     name: string;
     avatar: string;
     members?: string[];
+    call?: CallState;
 }
 
 interface UserData {
@@ -55,6 +57,14 @@ interface UserData {
     avatar: string;
     contactCode: string;
     contacts: Contact[];
+}
+
+type CallState = {
+    active: boolean;
+    offer?: any;
+    answer?: any;
+    initiator: string;
+    status: 'dialing' | 'ringing' | 'connected' | 'declined';
 }
 
 
@@ -80,6 +90,20 @@ export default function ChatPage() {
 
   const { toast } = useToast();
 
+  // WebRTC states
+  const [isCallModalOpen, setCallModalOpen] = useState(false);
+  const [isMuted, setMuted] = useState(false);
+  const peerConnection = useRef<RTCPeerConnection | null>(null);
+  const localStream = useRef<MediaStream | null>(null);
+  const remoteStream = useRef<MediaStream | null>(null);
+  const remoteAudioRef = useRef<HTMLAudioElement>(null);
+  const servers = {
+    iceServers: [
+        { urls: ['stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'] },
+    ],
+  };
+
+
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       if (currentUser) {
@@ -88,7 +112,6 @@ export default function ChatPage() {
         const userDocRef = doc(db, 'users', currentUser.uid);
         let docSnap = await getDoc(userDocRef);
         if (!docSnap.exists()) {
-          // This case should ideally be handled on the login page, but as a fallback:
           const newCode = await generateUniqueCode();
           const newUser: Partial<UserData> & {name: string, avatar: string} = { 
               name: currentUser.displayName || `Guest-${currentUser.uid.substring(0,5)}`, 
@@ -97,7 +120,7 @@ export default function ChatPage() {
               contacts: [], 
           };
           await setDoc(userDocRef, newUser);
-          docSnap = await getDoc(userDocRef); // re-fetch to get server data
+          docSnap = await getDoc(userDocRef);
         }
         
         const data = docSnap.data() as UserData;
@@ -117,47 +140,67 @@ export default function ChatPage() {
   useEffect(() => {
     if (!user || !userData) return;
 
-     // After getting user data, fetch their conversations
     const convQuery = query(collection(db, 'conversations'), where('members', 'array-contains', user.uid));
     const unsubscribeConversations = onSnapshot(convQuery, async (querySnapshot) => {
       const convs: Conversation[] = [];
+      const updatedConversations: Conversation[] = [];
       for (const docSnapshot of querySnapshot.docs) {
-          const convData = docSnapshot.data();
+          const convData = docSnapshot.data() as Conversation;
+          let conv: Conversation | null = null;
           if (convData.type === 'private') {
-              const otherUserId = convData.members.find((id: string) => id !== user.uid);
+              const otherUserId = convData.members?.find((id: string) => id !== user.uid);
               if (otherUserId) {
                 const otherUserDoc = await getDoc(doc(db, 'users', otherUserId));
                 if (otherUserDoc.exists()) {
                     const otherUserData = otherUserDoc.data();
-                    convs.push({
+                    conv = {
                         id: docSnapshot.id,
                         type: 'private',
                         name: otherUserData.name || `User ${otherUserId}`,
-                        avatar: otherUserData.avatar || `https://picsum.photos/seed/${otherUserId}/100/100`
-                    });
+                        avatar: otherUserData.avatar || `https://picsum.photos/seed/${otherUserId}/100/100`,
+                        members: convData.members,
+                        call: convData.call,
+                    };
                 }
               }
           } else { // group
-               convs.push({
+               conv = {
                   id: docSnapshot.id,
                   type: 'group',
                   name: convData.name,
                   avatar: convData.avatar || `https://picsum.photos/seed/${docSnapshot.id}/100/100`,
                   members: convData.members,
-              });
+               };
           }
+          if (conv) updatedConversations.push(conv);
       }
-      setConversations(convs);
-      if (convs.length > 0 && !selectedConversation) {
-          // Check if a conversation is stored in localStorage
+      setConversations(updatedConversations);
+
+      const currentSelected = updatedConversations.find(c => c.id === selectedConversation?.id) || selectedConversation;
+      
+      if(currentSelected?.call?.active && currentSelected.call.initiator !== user.uid && currentSelected.call.status === 'ringing') {
+        // Incoming call
+        setCallModalOpen(true);
+      } else if (currentSelected?.call?.active && currentSelected.call.status === 'connected') {
+        setCallModalOpen(true);
+      } else if (!currentSelected?.call?.active) {
+        setCallModalOpen(false);
+        if(peerConnection.current) {
+            handleHangUp(true);
+        }
+      }
+
+      setSelectedConversation(currentSelected);
+
+      if (updatedConversations.length > 0 && !selectedConversation) {
           const lastConversationId = localStorage.getItem('selectedConversationId');
-          const lastConv = convs.find(c => c.id === lastConversationId);
-          setSelectedConversation(lastConv || convs[0]);
+          const lastConv = updatedConversations.find(c => c.id === lastConversationId);
+          setSelectedConversation(lastConv || updatedConversations[0]);
       }
     });
     return () => unsubscribeConversations();
 
-  }, [user, userData, selectedConversation]);
+  }, [user, userData, selectedConversation?.id]);
 
 
   useEffect(() => {
@@ -165,10 +208,8 @@ export default function ChatPage() {
         setMessages([]);
         return;
     };
-    // Store selected conversation in local storage
     localStorage.setItem('selectedConversationId', selectedConversation.id);
 
-    // Listen for messages in the current conversation
     const messagesColRef = collection(db, 'conversations', selectedConversation.id, 'messages');
     const q = query(messagesColRef, orderBy('timestamp'));
 
@@ -181,7 +222,7 @@ export default function ChatPage() {
     });
 
     return () => unsubscribe();
-  }, [selectedConversation]);
+  }, [selectedConversation?.id]);
 
 
   const handleSendMessage = async (e: React.FormEvent) => {
@@ -218,11 +259,6 @@ export default function ChatPage() {
       }
     } catch (error) {
       console.error('Error triaging notification:', error);
-      toast({
-        variant: 'destructive',
-        title: 'Error',
-        description: 'Could not triage notification.',
-      });
     }
   };
   
@@ -301,22 +337,25 @@ export default function ChatPage() {
           avatar: newContactData.avatar || `https://picsum.photos/seed/${newContactId}/100/100` 
       };
 
-      // Add to current user's contacts
       const userDocRef = doc(db, 'users', user.uid);
       const updatedContacts = [...(userData?.contacts || []), newContact];
-      await updateDoc(userDocRef, { contacts: updatedContacts });
       
-      // Create a new private conversation
       const conversationId = [user.uid, newContactId].sort().join('_');
       const convDocRef = doc(db, 'conversations', conversationId);
       const convDocSnap = await getDoc(convDocRef);
+
+      const batch = writeBatch(db);
+      batch.update(userDocRef, { contacts: updatedContacts });
+
       if (!convDocSnap.exists()) {
-        await setDoc(convDocRef, {
+        batch.set(convDocRef, {
             type: 'private',
             members: [user.uid, newContactId],
             createdAt: serverTimestamp(),
+            call: { active: false }
         });
       }
+      await batch.commit();
 
       setUserData(prev => prev ? {...prev, contacts: updatedContacts} : null);
       toast({ title: 'Contact Added!', description: `You've successfully added ${newContact.name}.` });
@@ -353,8 +392,7 @@ export default function ChatPage() {
         setGroupMembers([]);
         setCreateGroupOpen(false);
 
-        const newConv = {id: groupDocRef.id, ...newGroup};
-        // select the new group
+        const newConv = {id: groupDocRef.id, ...newGroup} as Conversation;
         setConversations(prev => [...prev, newConv]);
         setSelectedConversation(newConv);
 
@@ -380,7 +418,6 @@ export default function ChatPage() {
      if (contact) {
         return { name: contact.name, avatar: contact.avatar };
     }
-    // Fallback for group members who are not in contacts list (possible in future)
     return { 
       name: `User ${senderId.substring(0,4)}`, 
       avatar: `https://picsum.photos/seed/${senderId}/100/100` 
@@ -389,8 +426,8 @@ export default function ChatPage() {
 
   const handleLogout = async () => {
     try {
+      if(peerConnection.current) await handleHangUp(true);
       await signOut(auth);
-      // The onAuthStateChanged listener will handle routing to '/'
     } catch (error) {
       console.error("Error signing out:", error);
       toast({
@@ -401,6 +438,150 @@ export default function ChatPage() {
     }
   };
 
+
+  // WebRTC Call Handling
+  const initializePeerConnection = async () => {
+    if (!selectedConversation || !user) return null;
+    
+    const pc = new RTCPeerConnection(servers);
+    
+    localStream.current = await navigator.mediaDevices.getUserMedia({ audio: true });
+    localStream.current.getTracks().forEach(track => {
+        pc.addTrack(track, localStream.current!);
+    });
+
+    const newRemoteStream = new MediaStream();
+    remoteStream.current = newRemoteStream;
+    if (remoteAudioRef.current) {
+      remoteAudioRef.current.srcObject = newRemoteStream;
+    }
+    
+    pc.ontrack = (event) => {
+        event.streams[0].getTracks().forEach(track => {
+            newRemoteStream.addTrack(track);
+        });
+    };
+
+    const callDocRef = doc(db, 'conversations', selectedConversation.id);
+    const iceCandidatesColRef = collection(callDocRef, 'iceCandidates');
+
+    pc.onicecandidate = (event) => {
+        event.candidate && addDoc(collection(iceCandidatesColRef, user.uid), event.candidate.toJSON());
+    };
+
+    // Listen for remote ICE candidates
+    const otherUserId = selectedConversation.members!.find(id => id !== user.uid)!;
+    onSnapshot(collection(iceCandidatesColRef, otherUserId), (snapshot) => {
+        snapshot.docChanges().forEach((change) => {
+            if (change.type === 'added') {
+                const candidate = new RTCIceCandidate(change.doc.data());
+                pc.addIceCandidate(candidate);
+            }
+        });
+    });
+
+    return pc;
+  }
+  
+  const handleInitiateCall = async () => {
+    if (!selectedConversation || !user) return;
+    setCallModalOpen(true);
+    
+    const pc = await initializePeerConnection();
+    if (!pc) return;
+    peerConnection.current = pc;
+
+    const callDocRef = doc(db, 'conversations', selectedConversation.id);
+    const offerDescription = await pc.createOffer();
+    await pc.setLocalDescription(offerDescription);
+    
+    const offer = { sdp: offerDescription.sdp, type: offerDescription.type };
+    await updateDoc(callDocRef, { call: { active: true, initiator: user.uid, offer, status: 'ringing' } });
+    
+    // Listen for answer
+    onSnapshot(callDocRef, (snapshot) => {
+        const data = snapshot.data();
+        if (data?.call?.answer && !pc.currentRemoteDescription) {
+            const answerDescription = new RTCSessionDescription(data.call.answer);
+            pc.setRemoteDescription(answerDescription);
+            updateDoc(callDocRef, { 'call.status': 'connected' });
+        }
+         if (!data?.call?.active) {
+            handleHangUp(true);
+        }
+    });
+  };
+
+  const handleAnswerCall = async () => {
+    if (!selectedConversation) return;
+
+    const pc = await initializePeerConnection();
+    if (!pc) return;
+    peerConnection.current = pc;
+    
+    const callDocRef = doc(db, 'conversations', selectedConversation.id);
+    const callSnap = await getDoc(callDocRef);
+    const offer = callSnap.data()?.call?.offer;
+    
+    if(offer) {
+        await pc.setRemoteDescription(new RTCSessionDescription(offer));
+        const answerDescription = await pc.createAnswer();
+        await pc.setLocalDescription(answerDescription);
+
+        const answer = { type: answerDescription.type, sdp: answerDescription.sdp };
+        await updateDoc(callDocRef, { 'call.answer': answer, 'call.status': 'connected' });
+    }
+  };
+
+  const handleHangUp = async (isSilent = false) => {
+      if(peerConnection.current) {
+        peerConnection.current.getSenders().forEach(sender => sender.track?.stop());
+        peerConnection.current.close();
+        peerConnection.current = null;
+      }
+      if(localStream.current){
+        localStream.current.getTracks().forEach(track => track.stop());
+        localStream.current = null;
+      }
+      
+      setCallModalOpen(false);
+
+      if (selectedConversation && !isSilent) {
+          const callDocRef = doc(db, 'conversations', selectedConversation.id);
+          const callSnap = await getDoc(callDocRef);
+          if (callSnap.exists() && callSnap.data().call?.active) {
+            await updateDoc(callDocRef, { call: { active: false } });
+
+            // Clear ICE candidates
+            const batch = writeBatch(db);
+            const iceCandidatesQuery1 = query(collection(callDocRef, 'iceCandidates', user!.uid));
+            const iceCandidatesQuery2 = query(collection(callDocRef, 'iceCandidates', selectedConversation.members!.find(id => id !== user!.uid)!));
+
+            const [snapshot1, snapshot2] = await Promise.all([getDocs(iceCandidatesQuery1), getDocs(iceCandidatesQuery2)]);
+            snapshot1.forEach(doc => batch.delete(doc.ref));
+            snapshot2.forEach(doc => batch.delete(doc.ref));
+            await batch.commit();
+          }
+      }
+  };
+
+  const handleDeclineCall = async () => {
+     if (!selectedConversation || !user) return;
+     const callDocRef = doc(db, 'conversations', selectedConversation.id);
+     await updateDoc(callDocRef, { 'call.status': 'declined', 'call.active': false });
+     setCallModalOpen(false);
+  }
+
+  const handleToggleMute = () => {
+    if (localStream.current) {
+        localStream.current.getAudioTracks().forEach(track => {
+            track.enabled = !track.enabled;
+        });
+        setMuted(!isMuted);
+    }
+  };
+
+
   if (loading || !user || !userData) {
     return (
       <div className="flex h-screen w-full items-center justify-center bg-background">
@@ -410,6 +591,68 @@ export default function ChatPage() {
         </div>
       </div>
     );
+  }
+
+  const renderCallModal = () => {
+    if (!selectedConversation?.call?.active) return null;
+    const isInitiator = selectedConversation.call.initiator === user?.uid;
+    const callStatus = selectedConversation.call.status;
+
+    let title = "Voice Call";
+    let content = <div className="h-10 w-10 animate-spin rounded-full border-4 border-primary border-t-transparent mx-auto" />;
+    let actions = (
+       <Button variant="destructive" onClick={() => handleHangUp(false)}>
+          <PhoneOff className="mr-2" />
+          Hang Up
+        </Button>
+    )
+
+    if (callStatus === 'ringing' && !isInitiator) {
+        title = `Incoming Call from ${selectedConversation.name}`;
+        content = <p>Do you want to accept the call?</p>;
+        actions = (
+            <>
+                <Button onClick={handleAnswerCall} className="bg-green-600 hover:bg-green-700">
+                    <Phone className="mr-2" />
+                    Accept
+                </Button>
+                <Button variant="destructive" onClick={handleDeclineCall}>
+                    <PhoneOff className="mr-2" />
+                    Decline
+                </Button>
+            </>
+        )
+    } else if (callStatus === 'ringing' && isInitiator) {
+        title = `Calling ${selectedConversation.name}...`;
+        content = <p>Waiting for them to answer.</p>
+    } else if (callStatus === 'connected') {
+        title = `On call with ${selectedConversation.name}`;
+        content = (
+            <div className="flex items-center justify-center gap-4">
+                <p>Call is active.</p>
+                <Button variant="outline" size="icon" onClick={handleToggleMute}>
+                   {isMuted ? <MicOff /> : <Mic />}
+                </Button>
+            </div>
+        )
+    }
+
+
+    return (
+         <AlertDialog open={isCallModalOpen} onOpenChange={setCallModalOpen}>
+            <AlertDialogContent>
+                <AlertDialogHeader>
+                    <AlertDialogTitle>{title}</AlertDialogTitle>
+                </AlertDialogHeader>
+                <AlertDialogDescription className="text-center my-4">
+                    {content}
+                </AlertDialogDescription>
+                <AlertDialogFooter className="sm:justify-center">
+                    {actions}
+                </AlertDialogFooter>
+            </AlertDialogContent>
+        </AlertDialog>
+    )
   }
 
   return (
@@ -560,9 +803,16 @@ export default function ChatPage() {
                     )}
                   </div>
                 </div>
-                <Button variant="ghost" size="icon">
-                  <MoreVertical className="h-5 w-5" />
-                </Button>
+                <div>
+                   {selectedConversation.type === 'private' && (
+                    <Button variant="ghost" size="icon" onClick={handleInitiateCall} disabled={selectedConversation.call?.active}>
+                        <Phone className="h-5 w-5" />
+                    </Button>
+                   )}
+                   <Button variant="ghost" size="icon">
+                     <MoreVertical className="h-5 w-5" />
+                   </Button>
+                </div>
               </header>
               <ScrollArea className="flex-1">
                 <main className="p-4">
@@ -621,6 +871,8 @@ export default function ChatPage() {
           )}
         </SidebarInset>
       </div>
+      {renderCallModal()}
+      <audio ref={remoteAudioRef} autoPlay playsInline />
     </SidebarProvider>
   );
 }
