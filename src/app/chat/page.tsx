@@ -1,11 +1,45 @@
+"use client";
+
+import { useState } from 'react';
 import { SidebarProvider, Sidebar, SidebarInset, SidebarHeader, SidebarTrigger, SidebarContent, SidebarMenu, SidebarMenuItem, SidebarMenuButton } from '@/components/ui/sidebar';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { MoreVertical, Paperclip, Send } from 'lucide-react';
+import { ScrollArea } from '@/components/ui/scroll-area';
+
+interface Message {
+  id: number;
+  sender: 'user' | 'other';
+  text: string;
+  avatar: string;
+  alt: string;
+}
 
 export default function ChatPage() {
+  const [messages, setMessages] = useState<Message[]>([
+    { id: 1, sender: 'other', text: 'Hey, how is it going?', avatar: 'https://picsum.photos/100/100', alt: 'Alice' },
+    { id: 2, sender: 'user', text: 'Pretty good! Just working on this new app.', avatar: 'https://picsum.photos/100/100', alt: 'User Avatar' },
+  ]);
+  const [newMessage, setNewMessage] = useState('');
+
+  const handleSendMessage = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (newMessage.trim() === '') return;
+
+    const newMessageObj: Message = {
+      id: messages.length + 1,
+      sender: 'user',
+      text: newMessage,
+      avatar: 'https://picsum.photos/100/100',
+      alt: 'User Avatar',
+    };
+
+    setMessages([...messages, newMessageObj]);
+    setNewMessage('');
+  };
+
   return (
     <SidebarProvider>
       <div className="flex min-h-screen bg-background">
@@ -59,44 +93,42 @@ export default function ChatPage() {
               <MoreVertical className="h-5 w-5" />
             </Button>
           </header>
-          <main className="flex-1 overflow-y-auto p-4">
-            <div className="space-y-4">
-              <div className="flex items-start gap-3">
-                <Avatar className="h-8 w-8">
-                  <AvatarImage src="https://picsum.photos/100/100" alt="Alice" data-ai-hint="woman person"/>
-                  <AvatarFallback>A</AvatarFallback>
-                </Avatar>
-                <Card className="rounded-2xl bg-muted p-3">
-                  <CardContent className="p-0">
-                    <p className="text-sm">Hey, how is it going?</p>
-                  </CardContent>
-                </Card>
+          <ScrollArea className="flex-1">
+            <main className="p-4">
+              <div className="space-y-4">
+                {messages.map((message) => (
+                  <div key={message.id} className={`flex items-start gap-3 ${message.sender === 'user' ? 'flex-row-reverse' : ''}`}>
+                    <Avatar className="h-8 w-8">
+                      <AvatarImage src={message.avatar} alt={message.alt} data-ai-hint={message.sender === 'user' ? 'female person' : 'woman person'} />
+                      <AvatarFallback>{message.alt.charAt(0)}</AvatarFallback>
+                    </Avatar>
+                    <Card className={`rounded-2xl p-3 ${message.sender === 'user' ? 'bg-primary text-primary-foreground' : 'bg-muted'}`}>
+                      <CardContent className="p-0">
+                        <p className="text-sm">{message.text}</p>
+                      </CardContent>
+                    </Card>
+                  </div>
+                ))}
               </div>
-              <div className="flex flex-row-reverse items-start gap-3">
-                <Avatar className="h-8 w-8">
-                  <AvatarImage src="https://picsum.photos/100/100" alt="User Avatar" data-ai-hint="female person"/>
-                  <AvatarFallback>U</AvatarFallback>
-                </Avatar>
-                <Card className="rounded-2xl bg-primary text-primary-foreground p-3">
-                  <CardContent className="p-0">
-                    <p className="text-sm">Pretty good! Just working on this new app.</p>
-                  </CardContent>
-                </Card>
-              </div>
-            </div>
-          </main>
+            </main>
+          </ScrollArea>
           <footer className="border-t bg-background p-4">
-            <div className="relative">
-              <Input placeholder="Type a message..." className="pr-24" />
+            <form onSubmit={handleSendMessage} className="relative">
+              <Input
+                placeholder="Type a message..."
+                className="pr-24"
+                value={newMessage}
+                onChange={(e) => setNewMessage(e.target.value)}
+              />
               <div className="absolute inset-y-0 right-0 flex items-center">
-                <Button variant="ghost" size="icon">
+                <Button variant="ghost" size="icon" type="button">
                   <Paperclip className="h-5 w-5" />
                 </Button>
-                <Button variant="ghost" size="icon">
+                <Button variant="ghost" size="icon" type="submit">
                   <Send className="h-5 w-5" />
                 </Button>
               </div>
-            </div>
+            </form>
           </footer>
         </SidebarInset>
       </div>
