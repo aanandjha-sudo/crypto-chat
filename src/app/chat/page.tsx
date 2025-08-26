@@ -8,13 +8,14 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { Paperclip, Send, RefreshCw, Users, User, LogOut, Phone, PhoneOff, Mic, MicOff, Copy, Edit, MessageSquare, Contact } from 'lucide-react';
+import { Paperclip, Send, RefreshCw, Users, User, LogOut, Phone, PhoneOff, Mic, MicOff, Copy, Edit, MessageSquare, Contact, Bell, BellOff } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { triageNotification } from '@/ai/flows/notification-triage';
 import { generateContactCode } from '@/ai/flows/user-codes';
 import { generateLoginCode } from '@/ai/flows/user-login-code';
 import { useToast } from '@/hooks/use-toast';
-import { db, auth } from '@/lib/firebase';
+import { db, auth, app } from '@/lib/firebase';
+import { getMessaging, getToken, onMessage } from "firebase/messaging";
 import { signInAnonymously, onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
 import { collection, addDoc, query, orderBy, onSnapshot, serverTimestamp, Timestamp, doc, setDoc, getDoc, updateDoc, where, getDocs, DocumentData, writeBatch } from 'firebase/firestore';
 import { Label } from '@/components/ui/label';
@@ -62,6 +63,7 @@ export interface UserData {
     contactCode: string;
     loginCode: string;
     contacts: Contact[];
+    fcmToken?: string;
 }
 
 type CallState = {
@@ -108,6 +110,10 @@ export default function ChatPage() {
   const [isEditProfileOpen, setEditProfileOpen] = useState(false);
   const [editProfileName, setEditProfileName] = useState('');
   const [editProfileAvatar, setEditProfileAvatar] = useState('');
+  
+  // Notifications
+  const [notificationPermission, setNotificationPermission] = useState<"default" | "granted" | "denied">("default");
+
 
   const { toast } = useToast();
 
@@ -122,6 +128,12 @@ export default function ChatPage() {
         { urls: ['stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'] },
     ],
   };
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && 'Notification' in window) {
+      setNotificationPermission(Notification.permission);
+    }
+  }, []);
   
   const generateUniqueCode = async (type: 'contact' | 'login') => {
     let isUnique = false;
@@ -384,6 +396,40 @@ export default function ChatPage() {
     return () => unsubscribe();
   
   }, [selectedConversation, currentUser, isCallModalOpen, handleHangUp]);
+  
+  const setupNotifications = useCallback(async (user: UserData) => {
+    if (typeof window === 'undefined' || !('serviceWorker' in navigator) || !('Notification' in window)) {
+        return;
+    }
+
+    const messaging = getMessaging(app);
+
+    if (Notification.permission === 'granted') {
+        try {
+            const currentToken = await getToken(messaging, { vapidKey: 'YOUR_VAPID_KEY' });
+            if (currentToken && currentToken !== user.fcmToken) {
+                const userDocRef = doc(db, 'users', user.id);
+                await updateDoc(userDocRef, { fcmToken: currentToken });
+                setCurrentUser(prev => prev ? { ...prev, fcmToken: currentToken } : null);
+            }
+        } catch (err) {
+            console.error('An error occurred while retrieving token. ', err);
+            toast({ variant: 'destructive', title: 'Notification Error', description: 'Could not get notification token.' });
+        }
+    }
+
+    onMessage(messaging, (payload) => {
+        console.log('Message received. ', payload);
+        toast({ title: payload.notification?.title, description: payload.notification?.body });
+    });
+  }, [app, toast]);
+
+  useEffect(() => {
+    if(currentUser && notificationPermission === 'granted') {
+        setupNotifications(currentUser);
+    }
+  }, [currentUser, notificationPermission, setupNotifications]);
+
 
   const performCodeRegeneration = useCallback(async () => {
       if (!currentUser) return;
@@ -451,13 +497,17 @@ export default function ChatPage() {
     }
 
     try {
-      const result = await triageNotification({ messageContent });
-      if (result.shouldSendNotification) {
-         toast({
-          title: 'Notification Sent (Simulated)',
-          description: result.reason,
-        });
-      }
+        const recipients = selectedConversation.members?.filter(id => id !== currentUser.id) || [];
+        for (const recipientId of recipients) {
+            const userDoc = await getDoc(doc(db, 'users', recipientId));
+            if(userDoc.exists() && userDoc.data().fcmToken) {
+                await triageNotification({ 
+                    messageContent,
+                    senderName: currentUser.name,
+                    fcmToken: userDoc.data().fcmToken,
+                });
+            }
+        }
     } catch (error) {
       console.error('Error triaging notification:', error);
     }
@@ -696,6 +746,33 @@ export default function ChatPage() {
         description: `Your ${type.toLowerCase()} has been copied to the clipboard.`,
     });
   }
+
+  const handleRequestNotificationPermission = async () => {
+    if (typeof window === 'undefined' || !('Notification' in window)) {
+        toast({ variant: "destructive", title: "Unsupported", description: "This browser does not support desktop notifications."});
+        return;
+    }
+
+    if(notificationPermission === 'granted') {
+        toast({title: "Already Enabled", description: "Notifications are already enabled."});
+        return;
+    }
+
+    if(notificationPermission === 'denied') {
+        toast({variant: "destructive", title: "Permission Denied", description: "You have previously denied notification permissions. Please enable them in your browser settings."});
+        return;
+    }
+
+    const permission = await Notification.requestPermission();
+    setNotificationPermission(permission);
+
+    if (permission === 'granted' && currentUser) {
+        toast({ title: "Permissions Granted!", description: "You will now receive notifications."})
+        await setupNotifications(currentUser);
+    } else {
+        toast({ variant: "destructive", title: "Permissions Denied", description: "You will not receive notifications."})
+    }
+};
 
 
   // WebRTC Call Handling
@@ -1024,6 +1101,18 @@ export default function ChatPage() {
                             </div>
                         </div>
                     </div>
+                </CardContent>
+            </Card>
+            <Card>
+                <CardHeader>
+                    <CardTitle>Notifications</CardTitle>
+                     <CardDescription>Enable or disable browser push notifications.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                   <Button onClick={handleRequestNotificationPermission} disabled={notificationPermission === 'granted'}>
+                        {notificationPermission === 'granted' ? <BellOff className="mr-2 h-4 w-4" /> : <Bell className="mr-2 h-4 w-4" />}
+                        {notificationPermission === 'granted' ? 'Notifications Enabled' : 'Enable Notifications'}
+                   </Button>
                 </CardContent>
             </Card>
              <Card>
