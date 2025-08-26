@@ -1,22 +1,21 @@
 "use client";
 
-import { useState, useEffect, useRef } from 'react';
-import { useRouter } from 'next/navigation';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { SidebarProvider, Sidebar, SidebarInset, SidebarHeader, SidebarTrigger, SidebarContent, SidebarMenu, SidebarMenuItem, SidebarMenuButton, SidebarFooter } from '@/components/ui/sidebar';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { MoreVertical, Paperclip, Send, Plus, RefreshCw, Users, User, LogOut, Phone, PhoneOff, Mic, MicOff } from 'lucide-react';
+import { MoreVertical, Paperclip, Send, Plus, RefreshCw, Users, User, LogOut, Phone, PhoneOff, Mic, MicOff, KeyRound, Copy } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { triageNotification } from '@/ai/flows/notification-triage';
 import { generateContactCode } from '@/ai/flows/user-codes';
+import { generateLoginCode } from '@/ai/flows/user-login-code';
 import { useToast } from '@/hooks/use-toast';
-import { auth, db } from '@/lib/firebase';
+import { db } from '@/lib/firebase';
 import { collection, addDoc, query, orderBy, onSnapshot, serverTimestamp, Timestamp, doc, setDoc, getDoc, updateDoc, where, getDocs, DocumentData, writeBatch } from 'firebase/firestore';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from "@/components/ui/checkbox"
-import { onAuthStateChanged, signOut, User as FirebaseUser } from 'firebase/auth';
 import type { FirebaseError } from 'firebase/app';
 import {
   Dialog,
@@ -27,7 +26,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog"
-import { AlertDialog, AlertDialogAction, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 
 
 interface Message {
@@ -54,9 +53,11 @@ interface Conversation {
 }
 
 interface UserData {
+    id: string;
     name: string;
     avatar: string;
     contactCode: string;
+    loginCode: string;
     contacts: Contact[];
 }
 
@@ -70,10 +71,8 @@ type CallState = {
 
 
 export default function ChatPage() {
-  const [user, setUser] = useState<FirebaseUser | null>(null);
-  const [userData, setUserData] = useState<UserData | null>(null);
+  const [currentUser, setCurrentUser] = useState<UserData | null>(null);
   const [loading, setLoading] = useState(true);
-  const router = useRouter();
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState('');
@@ -88,6 +87,15 @@ export default function ChatPage() {
   const [isCreateGroupOpen, setCreateGroupOpen] = useState(false);
   const [groupName, setGroupName] = useState('');
   const [groupMembers, setGroupMembers] = useState<string[]>([]);
+  
+  // Account Switching
+  const [isSwitchAccountOpen, setSwitchAccountOpen] = useState(false);
+  const [loginCodeInput, setLoginCodeInput] = useState('');
+
+  // Code Regeneration
+  const [isRegenerateConfirmOpen, setRegenerateConfirmOpen] = useState(false);
+  const [regenerationTimer, setRegenerationTimer] = useState(0);
+  const regenerationIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const { toast } = useToast();
 
@@ -104,51 +112,93 @@ export default function ChatPage() {
     ],
   };
 
-
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-      if (currentUser) {
-        setUser(currentUser);
-        // Fetch or create user data
-        const userDocRef = doc(db, 'users', currentUser.uid);
-        let docSnap = await getDoc(userDocRef);
-        if (!docSnap.exists()) {
-          const newCode = await generateUniqueCode();
-          const newUser: Partial<UserData> & {name: string, avatar: string} = { 
-              name: currentUser.displayName || `Guest-${currentUser.uid.substring(0,5)}`, 
-              avatar: currentUser.photoURL || `https://picsum.photos/seed/${currentUser.uid}/100/100`,
-              contactCode: newCode, 
-              contacts: [], 
-          };
-          await setDoc(userDocRef, newUser);
-          docSnap = await getDoc(userDocRef);
-        }
-        
-        const data = docSnap.data() as UserData;
-        setUserData(data);
-
-      } else {
-        setUser(null);
-        setUserData(null);
-        router.push('/');
+  const generateUniqueCode = async (type: 'contact' | 'login') => {
+    let isUnique = false;
+    let newCode = '';
+    let attempts = 0;
+    const maxAttempts = 10;
+    while (!isUnique && attempts < maxAttempts) {
+      attempts++;
+      const { code } = type === 'contact' ? await generateContactCode() : await generateLoginCode();
+      const field = type === 'contact' ? "contactCode" : "loginCode";
+      const q = query(collection(db, "users"), where(field, "==", code));
+      const querySnapshot = await getDocs(q);
+      if (querySnapshot.empty) {
+        isUnique = true;
+        newCode = code;
       }
-      setLoading(false);
-    });
+    }
+    if (!isUnique) {
+      throw new Error(`Failed to generate a unique ${type} code after several attempts.`);
+    }
+    return newCode;
+  }
+  
+  const createNewUser = useCallback(async () => {
+    try {
+      const newUserId = doc(collection(db, 'users')).id;
+      const [newContactCode, newLoginCode] = await Promise.all([
+          generateUniqueCode('contact'),
+          generateUniqueCode('login')
+      ]);
 
-    return () => unsubscribe();
-  }, [router]);
+      const newUser: UserData = {
+          id: newUserId,
+          name: `Guest-${newUserId.substring(0, 5)}`,
+          avatar: `https://picsum.photos/seed/${newUserId}/100/100`,
+          contactCode: newContactCode,
+          loginCode: newLoginCode,
+          contacts: [],
+      };
+      
+      const userDocRef = doc(db, 'users', newUserId);
+      await setDoc(userDocRef, newUser);
+      
+      localStorage.setItem('currentUserId', newUserId);
+      return newUser;
+    } catch(error) {
+      console.error("Failed to create new user:", error);
+      toast({ variant: 'destructive', title: 'Initialization Failed', description: 'Could not create a new user profile.'});
+      return null;
+    }
+  }, [toast]);
+
 
   useEffect(() => {
-    if (!user || !userData) return;
+    const initializeUser = async () => {
+        setLoading(true);
+        const userId = localStorage.getItem('currentUserId');
+        if (userId) {
+            const userDocRef = doc(db, 'users', userId);
+            const docSnap = await getDoc(userDocRef);
+            if (docSnap.exists()) {
+                setCurrentUser({ id: docSnap.id, ...docSnap.data() } as UserData);
+            } else {
+                // User ID in storage is invalid, create new user
+                const newUser = await createNewUser();
+                setCurrentUser(newUser);
+            }
+        } else {
+            // No user ID, create new user
+            const newUser = await createNewUser();
+            setCurrentUser(newUser);
+        }
+        setLoading(false);
+    };
+    initializeUser();
+  }, [createNewUser]);
 
-    const convQuery = query(collection(db, 'conversations'), where('members', 'array-contains', user.uid));
+  useEffect(() => {
+    if (!currentUser) return;
+
+    const convQuery = query(collection(db, 'conversations'), where('members', 'array-contains', currentUser.id));
     const unsubscribeConversations = onSnapshot(convQuery, async (querySnapshot) => {
       const updatedConversations: Conversation[] = [];
       for (const docSnapshot of querySnapshot.docs) {
           const convData = docSnapshot.data() as DocumentData;
           let conv: Conversation | null = null;
           if (convData.type === 'private') {
-              const otherUserId = convData.members?.find((id: string) => id !== user.uid);
+              const otherUserId = convData.members?.find((id: string) => id !== currentUser.id);
               if (otherUserId) {
                 const otherUserDoc = await getDoc(doc(db, 'users', otherUserId));
                 if (otherUserDoc.exists()) {
@@ -200,7 +250,7 @@ export default function ChatPage() {
     });
     return () => unsubscribeConversations();
 
-  }, [user, userData, selectedConversation?.id]);
+  }, [currentUser, selectedConversation?.id, toast]);
 
 
   useEffect(() => {
@@ -225,7 +275,7 @@ export default function ChatPage() {
   }, [selectedConversation?.id]);
   
   useEffect(() => {
-    if (!selectedConversation || !user) return;
+    if (!selectedConversation || !currentUser) return;
   
     const callDocRef = doc(db, "conversations", selectedConversation.id);
   
@@ -233,38 +283,32 @@ export default function ChatPage() {
       const convData = snapshot.data();
       if (!convData) return;
   
-      // Update the whole conversation object in state to ensure UI reacts
       setSelectedConversation(prev => {
         if (!prev || prev.id !== snapshot.id) return prev;
-        
-        // This is a simplified update; you might need a more sophisticated merge
         const updatedCallState = convData.call;
         const needsUpdate = JSON.stringify(prev.call) !== JSON.stringify(updatedCallState);
-
         return needsUpdate ? { ...prev, call: updatedCallState } : prev;
       });
   
       const callState = convData.call as CallState | undefined;
-      const isPartOfCall = callState?.active && user.uid && convData.members?.includes(user.uid);
+      const isPartOfCall = callState?.active && convData.members?.includes(currentUser.id);
   
       if (isPartOfCall) {
-        const isRingingForMe = callState.status === 'ringing' && callState.initiator !== user.uid;
+        const isRingingForMe = callState.status === 'ringing' && callState.initiator !== currentUser.id;
         const isConnected = callState.status === 'connected';
-        const isDialing = callState.status === 'dialing' || (callState.status === 'ringing' && callState.initiator === user.uid);
+        const isDialing = callState.status === 'dialing' || (callState.status === 'ringing' && callState.initiator === currentUser.id);
         
         if (isRingingForMe || isConnected || isDialing) {
             if (!isCallModalOpen) setCallModalOpen(true);
         } else {
-            // Call ended or was declined
             if (peerConnection.current) {
-              handleHangUp(true); // silent hangup to clean up local resources
+              handleHangUp(true);
             }
             if(isCallModalOpen) setCallModalOpen(false);
         }
       } else {
-        // No active call I am part of
         if (peerConnection.current) {
-          handleHangUp(true); // silent hangup
+          handleHangUp(true);
         }
         if(isCallModalOpen) setCallModalOpen(false);
       }
@@ -272,12 +316,30 @@ export default function ChatPage() {
   
     return () => unsubscribe();
   
-  }, [selectedConversation?.id, user?.uid, isCallModalOpen]);
+  }, [selectedConversation?.id, currentUser?.id, isCallModalOpen]);
 
+  // Regeneration Timer effect
+  useEffect(() => {
+    if (regenerationTimer > 0) {
+      regenerationIntervalRef.current = setInterval(() => {
+        setRegenerationTimer(prev => prev - 1);
+      }, 1000);
+    } else if (regenerationTimer === 0 && regenerationIntervalRef.current) {
+      clearInterval(regenerationIntervalRef.current);
+      regenerationIntervalRef.current = null;
+      // The timer has finished, now perform the regeneration
+      performCodeRegeneration();
+    }
+    return () => {
+      if (regenerationIntervalRef.current) {
+        clearInterval(regenerationIntervalRef.current);
+      }
+    };
+  }, [regenerationTimer]);
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (newMessage.trim() === '' || !selectedConversation || !user) return;
+    if (newMessage.trim() === '' || !selectedConversation || !currentUser) return;
 
     const messageContent = newMessage;
     setNewMessage('');
@@ -285,8 +347,8 @@ export default function ChatPage() {
     try {
       const messagesColRef = collection(db, 'conversations', selectedConversation.id, 'messages');
       await addDoc(messagesColRef, {
-        senderId: user.uid,
-        senderName: userData?.name,
+        senderId: currentUser.id,
+        senderName: currentUser?.name,
         text: messageContent,
         timestamp: serverTimestamp(),
       });
@@ -311,37 +373,16 @@ export default function ChatPage() {
       console.error('Error triaging notification:', error);
     }
   };
-  
-  const generateUniqueCode = async () => {
-    let isUnique = false;
-    let newCode = '';
-    let attempts = 0;
-    const maxAttempts = 10;
-    while (!isUnique && attempts < maxAttempts) {
-      attempts++;
-      const { code } = await generateContactCode();
-      const q = query(collection(db, "users"), where("contactCode", "==", code));
-      const querySnapshot = await getDocs(q);
-      if (querySnapshot.empty) {
-        isUnique = true;
-        newCode = code;
-      }
-    }
-    if (!isUnique) {
-      throw new Error("Failed to generate a unique contact code after several attempts.");
-    }
-    return newCode;
-  }
 
-  const handleGenerateCode = async () => {
-    if (!user) return;
+  const handleGenerateContactCode = async () => {
+    if (!currentUser) return;
     try {
-      const newCode = await generateUniqueCode();
-      const userDocRef = doc(db, 'users', user.uid);
+      const newCode = await generateUniqueCode('contact');
+      const userDocRef = doc(db, 'users', currentUser.id);
       await updateDoc(userDocRef, { contactCode: newCode });
-      setUserData(prev => prev ? {...prev, contactCode: newCode} : null);
+      setCurrentUser(prev => prev ? {...prev, contactCode: newCode} : null);
       toast({
-        title: 'New Code Generated',
+        title: 'New Contact Code Generated',
         description: `Your new contact code is: ${newCode}`,
       });
     } catch (error) {
@@ -353,9 +394,53 @@ export default function ChatPage() {
       })
     }
   };
+  
+  const performCodeRegeneration = async () => {
+      if (!currentUser) return;
+       try {
+        const newCode = await generateUniqueCode('login');
+        const userDocRef = doc(db, 'users', currentUser.id);
+        await updateDoc(userDocRef, { loginCode: newCode });
+        setCurrentUser(prev => prev ? {...prev, loginCode: newCode} : null);
+        toast({
+          title: 'Private Code Regenerated',
+          description: `Your new private login code is: ${newCode}`,
+        });
+      } catch (error) {
+        console.error("Error regenerating login code:", error);
+        toast({
+          variant: "destructive",
+          title: "Error",
+          description: "Could not regenerate your private code.",
+        });
+      } finally {
+        setRegenerateConfirmOpen(false);
+      }
+  }
+
+  const handleStartRegeneration = () => {
+    setRegenerateConfirmOpen(false);
+    setRegenerationTimer(120); // 2 minutes
+    toast({
+        title: 'Regeneration Started',
+        description: 'A new private code will be generated in 2 minutes. You can cancel this process.',
+    });
+  };
+
+  const handleCancelRegeneration = () => {
+    if (regenerationIntervalRef.current) {
+        clearInterval(regenerationIntervalRef.current);
+        regenerationIntervalRef.current = null;
+    }
+    setRegenerationTimer(0);
+    toast({
+        title: 'Regeneration Canceled',
+        description: 'Your private code has not been changed.',
+    });
+  }
 
   const handleAddContact = async () => {
-    if (!addContactCode.trim() || !user) return;
+    if (!addContactCode.trim() || !currentUser) return;
     
     try {
       const q = query(collection(db, "users"), where("contactCode", "==", addContactCode));
@@ -369,12 +454,12 @@ export default function ChatPage() {
       const newContactDoc = querySnapshot.docs[0];
       const newContactId = newContactDoc.id;
       
-      if(newContactId === user.uid) {
+      if(newContactId === currentUser.id) {
         toast({ variant: 'destructive', title: 'Cannot Add Yourself', description: 'You cannot add yourself as a contact.' });
         return;
       }
       
-      const existingContact = (userData?.contacts || []).find(c => c.id === newContactId)
+      const existingContact = (currentUser?.contacts || []).find(c => c.id === newContactId)
       if(existingContact) {
         toast({ variant: 'destructive', title: 'Contact Exists', description: 'This user is already in your contact list.' });
         return;
@@ -387,10 +472,10 @@ export default function ChatPage() {
           avatar: newContactData.avatar || `https://picsum.photos/seed/${newContactId}/100/100` 
       };
 
-      const userDocRef = doc(db, 'users', user.uid);
-      const updatedContacts = [...(userData?.contacts || []), newContact];
+      const userDocRef = doc(db, 'users', currentUser.id);
+      const updatedContacts = [...(currentUser?.contacts || []), newContact];
       
-      const conversationId = [user.uid, newContactId].sort().join('_');
+      const conversationId = [currentUser.id, newContactId].sort().join('_');
       const convDocRef = doc(db, 'conversations', conversationId);
       const convDocSnap = await getDoc(convDocRef);
 
@@ -400,14 +485,14 @@ export default function ChatPage() {
       if (!convDocSnap.exists()) {
         batch.set(convDocRef, {
             type: 'private',
-            members: [user.uid, newContactId],
+            members: [currentUser.id, newContactId],
             createdAt: serverTimestamp(),
             call: { active: false, status: 'ended' }
         });
       }
       await batch.commit();
 
-      setUserData(prev => prev ? {...prev, contacts: updatedContacts} : null);
+      setCurrentUser(prev => prev ? {...prev, contacts: updatedContacts} : null);
       toast({ title: 'Contact Added!', description: `You've successfully added ${newContact.name}.` });
       setAddContactCode('');
       setAddContactOpen(false);
@@ -419,18 +504,18 @@ export default function ChatPage() {
   };
 
   const handleCreateGroup = async () => {
-     if (!groupName.trim() || groupMembers.length === 0 || !user) {
+     if (!groupName.trim() || groupMembers.length === 0 || !currentUser) {
         toast({ variant: 'destructive', title: 'Invalid Group', description: 'Group name and at least one member are required.' });
         return;
      }
 
      try {
-        const allMembers = [user.uid, ...groupMembers];
+        const allMembers = [currentUser.id, ...groupMembers];
         const newGroup = {
             name: groupName,
             type: 'group',
             members: allMembers,
-            createdBy: user.uid,
+            createdBy: currentUser.id,
             createdAt: serverTimestamp(),
             avatar: `https://picsum.photos/seed/${groupName}/100/100`
         };
@@ -442,7 +527,6 @@ export default function ChatPage() {
         setGroupMembers([]);
         setCreateGroupOpen(false);
 
-        // This is not a full Conversation object, but it's enough for selection
         const newConv = {id: groupDocRef.id, ...newGroup} as unknown as Conversation;
         setConversations(prev => [...prev, newConv]);
         setSelectedConversation(newConv);
@@ -462,42 +546,65 @@ export default function ChatPage() {
   }
   
   const getSender = (senderId: string) => {
-    if (senderId === user?.uid) {
-      return { name: userData?.name, avatar: userData?.avatar };
+    if (senderId === currentUser?.id) {
+      return { name: currentUser?.name, avatar: currentUser?.avatar };
     }
-    const contact = userData?.contacts.find(c => c.id === senderId);
+    const contact = currentUser?.contacts.find(c => c.id === senderId);
      if (contact) {
         return { name: contact.name, avatar: contact.avatar };
     }
-    // Fallback for group members who are not in contacts (if logic allows)
-    // For now, this just handles the case where sender data is missing.
     return { 
       name: `User ${senderId.substring(0,4)}`, 
       avatar: `https://picsum.photos/seed/${senderId}/100/100` 
     };
   }
 
-  const handleLogout = async () => {
+  const handleSwitchAccount = async () => {
+    if (!loginCodeInput.trim()) return;
+
     try {
+      const q = query(collection(db, 'users'), where('loginCode', '==', loginCodeInput));
+      const querySnapshot = await getDocs(q);
+
+      if (querySnapshot.empty) {
+        toast({ variant: 'destructive', title: 'Invalid Code', description: 'No account found with that private code.' });
+        return;
+      }
+      
+      const userDoc = querySnapshot.docs[0];
+      const newUserId = userDoc.id;
+
       if(peerConnection.current) await handleHangUp(false);
-      await signOut(auth);
-      router.push('/');
-    } catch (error) {
-      console.error("Error signing out:", error);
-      toast({
-        variant: 'destructive',
-        title: 'Logout Failed',
-        description: 'There was an error signing you out.',
-      });
+      
+      localStorage.setItem('currentUserId', newUserId);
+      setCurrentUser({ id: newUserId, ...userDoc.data() } as UserData);
+      setSelectedConversation(null); // Reset conversation
+      setMessages([]);
+      setConversations([]);
+      setLoginCodeInput('');
+      setSwitchAccountOpen(false);
+      toast({ title: 'Account Switched', description: 'Successfully logged in to the new account.' });
+      
+    } catch(error) {
+      console.error("Error switching account:", error);
+      toast({ variant: 'destructive', title: 'Error', description: 'Could not switch accounts.' });
     }
-  };
+  }
+
+  const handleCopyCode = (code: string | undefined, type: string) => {
+    if (!code) return;
+    navigator.clipboard.writeText(code);
+    toast({
+        title: `${type} Copied!`,
+        description: `Your ${type.toLowerCase()} has been copied to the clipboard.`,
+    });
+  }
 
 
   // WebRTC Call Handling
   const initializePeerConnection = async () => {
-    if (!selectedConversation || !user) return null;
+    if (!selectedConversation || !currentUser) return null;
     
-    // Clean up any existing connection
     if (peerConnection.current) {
         peerConnection.current.close();
     }
@@ -522,11 +629,11 @@ export default function ChatPage() {
 
     const callDocRef = doc(db, 'conversations', selectedConversation.id);
     const iceCandidatesColRef = collection(callDocRef, 'iceCandidates');
-    const otherUserId = selectedConversation.members!.find(id => id !== user.uid)!;
+    const otherUserId = selectedConversation.members!.find(id => id !== currentUser.id)!;
 
     pc.onicecandidate = (event) => {
         if (event.candidate) {
-            addDoc(collection(iceCandidatesColRef, user.uid), event.candidate.toJSON());
+            addDoc(collection(iceCandidatesColRef, currentUser.id), event.candidate.toJSON());
         }
     };
 
@@ -543,7 +650,7 @@ export default function ChatPage() {
   }
   
   const handleInitiateCall = async () => {
-    if (!selectedConversation || !user) return;
+    if (!selectedConversation || !currentUser) return;
     
     const pc = await initializePeerConnection();
     if (!pc) return;
@@ -554,7 +661,7 @@ export default function ChatPage() {
     await pc.setLocalDescription(offerDescription);
     
     const offer = { sdp: offerDescription.sdp, type: offerDescription.type };
-    await updateDoc(callDocRef, { call: { active: true, initiator: user.uid, offer, status: 'ringing' } });
+    await updateDoc(callDocRef, { call: { active: true, initiator: currentUser.id, offer, status: 'ringing' } });
     
     onSnapshot(callDocRef, (snapshot) => {
         const data = snapshot.data();
@@ -613,7 +720,7 @@ export default function ChatPage() {
   };
 
   const handleDeclineCall = async () => {
-     if (!selectedConversation || !user) return;
+     if (!selectedConversation || !currentUser) return;
      const callDocRef = doc(db, 'conversations', selectedConversation.id);
      await updateDoc(callDocRef, { call: { active: false, status: 'declined' } });
      setCallModalOpen(false);
@@ -629,12 +736,12 @@ export default function ChatPage() {
   };
 
 
-  if (loading || !user || !userData) {
+  if (loading || !currentUser) {
     return (
       <div className="flex h-screen w-full items-center justify-center bg-background">
         <div className="flex flex-col items-center gap-4">
             <div className="h-10 w-10 animate-spin rounded-full border-4 border-primary border-t-transparent" />
-            <p className="text-muted-foreground">Loading...</p>
+            <p className="text-muted-foreground">Initializing Secure Session...</p>
         </div>
       </div>
     );
@@ -644,7 +751,7 @@ export default function ChatPage() {
     const callState = selectedConversation?.call;
     if (!isCallModalOpen || !callState?.active) return null;
 
-    const isInitiator = callState.initiator === user?.uid;
+    const isInitiator = callState.initiator === currentUser?.id;
     const callStatus = callState.status;
 
     let title = "Voice Call";
@@ -706,6 +813,23 @@ export default function ChatPage() {
     )
   }
 
+  const renderRegenDialog = () => (
+    <AlertDialog open={isRegenerateConfirmOpen} onOpenChange={setRegenerateConfirmOpen}>
+        <AlertDialogContent>
+            <AlertDialogHeader>
+                <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
+                <AlertDialogDescription>
+                    This will permanently create a new private login code. Your old code will no longer work. This action will start a 2-minute timer before completing.
+                </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction onClick={handleStartRegeneration}>Continue</AlertDialogAction>
+            </AlertDialogFooter>
+        </AlertDialogContent>
+    </AlertDialog>
+  );
+
   return (
     <SidebarProvider>
       <div className="flex min-h-screen bg-background">
@@ -714,18 +838,41 @@ export default function ChatPage() {
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Avatar className="h-8 w-8">
-                  <AvatarImage src={userData?.avatar} alt={userData?.name} data-ai-hint="female person" />
-                  <AvatarFallback>{userData?.name?.charAt(0)}</AvatarFallback>
+                  <AvatarImage src={currentUser?.avatar} alt={currentUser?.name} data-ai-hint="female person" />
+                  <AvatarFallback>{currentUser?.name?.charAt(0)}</AvatarFallback>
                 </Avatar>
                 <div className="flex flex-col">
-                  <span className="text-sm font-semibold text-foreground">{userData?.name}</span>
-                  <span className="text-xs text-muted-foreground">{user.email || 'Guest'}</span>
-                  <span className="text-xs text-muted-foreground font-mono truncate">UID: {user.uid}</span>
+                  <span className="text-sm font-semibold text-foreground">{currentUser?.name}</span>
+                  <span className="text-xs text-muted-foreground font-mono truncate">ID: {currentUser?.id}</span>
                 </div>
               </div>
-               <Button variant="ghost" size="icon" className="h-7 w-7" onClick={handleLogout}>
-                <LogOut className="h-4 w-4" />
-              </Button>
+                <Dialog open={isSwitchAccountOpen} onOpenChange={setSwitchAccountOpen}>
+                  <DialogTrigger asChild>
+                    <Button variant="ghost" size="icon" className="h-7 w-7">
+                        <LogOut className="h-4 w-4" />
+                    </Button>
+                  </DialogTrigger>
+                  <DialogContent>
+                      <DialogHeader>
+                          <DialogTitle>Switch Account</DialogTitle>
+                          <DialogDescription>
+                              Enter a private login code to switch to another account. Your current session will be replaced.
+                          </DialogDescription>
+                      </DialogHeader>
+                      <div className="grid gap-4 py-4">
+                          <Label htmlFor="login-code">Private Login Code</Label>
+                          <Input 
+                              id="login-code"
+                              value={loginCodeInput}
+                              onChange={(e) => setLoginCodeInput(e.target.value)}
+                              placeholder="e.g. a1b2c3d4"
+                          />
+                      </div>
+                      <DialogFooter>
+                          <Button onClick={handleSwitchAccount}>Switch Account</Button>
+                      </DialogFooter>
+                  </DialogContent>
+                </Dialog>
             </div>
           </SidebarHeader>
           <SidebarContent>
@@ -802,7 +949,7 @@ export default function ChatPage() {
                       <Label>Members</Label>
                        <ScrollArea className="h-40">
                          <div className="space-y-2">
-                          {userData?.contacts.map(contact => (
+                          {currentUser?.contacts.map(contact => (
                               <div key={contact.id} className="flex items-center space-x-2">
                                 <Checkbox 
                                   id={`member-${contact.id}`} 
@@ -828,12 +975,43 @@ export default function ChatPage() {
                 </Dialog>
               </div>
               
-              <Card className="p-2 mt-2">
-                <div className="flex items-center justify-between">
-                    <p className="text-xs text-muted-foreground font-mono truncate">{userData?.contactCode || 'loading...'}</p>
-                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={handleGenerateCode}>
-                        <RefreshCw className="h-4 w-4" />
-                    </Button>
+              <Card className="p-2 mt-2 space-y-2">
+                 <div className="space-y-1">
+                    <Label className="text-xs text-muted-foreground px-1">Your Private Login Code (Keep it secret!)</Label>
+                    <div className="flex items-center justify-between">
+                        <p className="text-xs text-foreground font-mono truncate">{currentUser?.loginCode}</p>
+                        <div className="flex items-center">
+                            {regenerationTimer > 0 ? (
+                               <Button variant="destructive" size="sm" onClick={handleCancelRegeneration}>
+                                 Cancel ({Math.floor(regenerationTimer/60)}:{(regenerationTimer%60).toString().padStart(2, '0')})
+                               </Button>
+                            ) : (
+                                <>
+                                 <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleCopyCode(currentUser?.loginCode, 'Private Login Code')}>
+                                    <Copy className="h-4 w-4" />
+                                 </Button>
+                                 <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setRegenerateConfirmOpen(true)}>
+                                    <RefreshCw className="h-4 w-4" />
+                                 </Button>
+                                </>
+                            )}
+                        </div>
+                    </div>
+                </div>
+
+                <div className="space-y-1">
+                    <Label className="text-xs text-muted-foreground px-1">Your Public Contact Code</Label>
+                    <div className="flex items-center justify-between">
+                        <p className="text-xs text-muted-foreground font-mono truncate">{currentUser?.contactCode || 'loading...'}</p>
+                         <div className="flex items-center">
+                            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleCopyCode(currentUser?.contactCode, 'Public Contact Code')}>
+                                <Copy className="h-4 w-4" />
+                            </Button>
+                            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={handleGenerateContactCode}>
+                                <RefreshCw className="h-4 w-4" />
+                            </Button>
+                        </div>
+                    </div>
                 </div>
               </Card>
             </SidebarFooter>
@@ -870,7 +1048,7 @@ export default function ChatPage() {
                 <main className="p-4">
                   <div className="space-y-4">
                     {messages.map((message) => {
-                      const isUser = message.senderId === user.uid;
+                      const isUser = message.senderId === currentUser.id;
                       const sender = getSender(message.senderId);
                       return (
                         <div key={message.id} className={`flex items-end gap-3 ${isUser ? 'flex-row-reverse' : ''}`}>
@@ -924,6 +1102,7 @@ export default function ChatPage() {
         </SidebarInset>
       </div>
       {renderCallModal()}
+      {renderRegenDialog()}
       <audio ref={remoteAudioRef} autoPlay playsInline />
     </SidebarProvider>
   );
