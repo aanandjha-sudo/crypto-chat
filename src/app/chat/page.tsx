@@ -8,6 +8,8 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { MoreVertical, Paperclip, Send } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { triageNotification } from '@/ai/flows/notification-triage';
+import { useToast } from '@/hooks/use-toast';
 
 interface Message {
   id: number;
@@ -23,8 +25,9 @@ export default function ChatPage() {
     { id: 2, sender: 'user', text: 'Pretty good! Just working on this new app.', avatar: 'https://picsum.photos/100/100', alt: 'User Avatar' },
   ]);
   const [newMessage, setNewMessage] = useState('');
+  const { toast } = useToast();
 
-  const handleSendMessage = (e: React.FormEvent) => {
+  const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     if (newMessage.trim() === '') return;
 
@@ -37,7 +40,25 @@ export default function ChatPage() {
     };
 
     setMessages([...messages, newMessageObj]);
+    const messageContent = newMessage;
     setNewMessage('');
+
+    try {
+      const result = await triageNotification({ messageContent });
+      toast({
+        title: result.shouldSendNotification
+          ? 'Notification Would Be Sent'
+          : 'Notification Would Not Be Sent',
+        description: result.reason,
+      });
+    } catch (error) {
+      console.error('Error triaging notification:', error);
+      toast({
+        variant: 'destructive',
+        title: 'Error',
+        description: 'Could not triage notification.',
+      });
+    }
   };
 
   return (
