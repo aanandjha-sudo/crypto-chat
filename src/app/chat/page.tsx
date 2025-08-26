@@ -5,7 +5,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Sidebar, SidebarInset, SidebarHeader, SidebarTrigger, SidebarContent, SidebarMenu, SidebarMenuItem, SidebarMenuButton, SidebarFooter, useSidebar } from '@/components/ui/sidebar';
 import { SheetTitle } from '@/components/ui/sheet';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { Card, CardHeader, CardContent, CardTitle, CardDescription } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Send, RefreshCw, Users, User, Phone, PhoneOff, Mic, MicOff, Copy, Edit, MessageSquare, Contact, Bell, BellOff, Upload, Coffee, SmilePlus, Trash2, Paperclip, File, Video, Image as ImageIcon } from 'lucide-react';
@@ -217,7 +217,7 @@ export default function ChatPage() {
     }
   }, []);
   
-  const generateUniqueCode = async (type: 'contact' | 'login') => {
+  const generateUniqueCode = useCallback(async (type: 'contact' | 'login') => {
     let isUnique = false;
     let newCode = '';
     let attempts = 0;
@@ -237,7 +237,7 @@ export default function ChatPage() {
       throw new Error(`Failed to generate a unique ${type} code after several attempts.`);
     }
     return newCode;
-  }
+  }, []);
   
   const initializeUser = useCallback(async (firebaseUser: FirebaseUser) => {
     const userId = localStorage.getItem('currentUserId') || firebaseUser.uid;
@@ -289,7 +289,7 @@ export default function ChatPage() {
     setEditProfileName(user.name);
     setEditProfileAvatar(user.avatar);
     setLoading(false);
-  }, [toast]);
+  }, [toast, generateUniqueCode]);
 
 
   useEffect(() => {
@@ -354,12 +354,15 @@ export default function ChatPage() {
             
         setConversations(loadedConversations);
 
-        if (loadedConversations.length > 0 && !selectedConversation) {
+        if (loadedConversations.length > 0) {
              const lastConversationId = localStorage.getItem('selectedConversationId');
-             const lastSelected = loadedConversations.find(c => c.id === lastConversationId);
-             if (activeView === 'chats') {
-                setSelectedConversation(lastSelected || loadedConversations[0]);
-             }
+             const currentSelectedExists = loadedConversations.some(c => c.id === selectedConversation?.id)
+             if(!selectedConversation || !currentSelectedExists) {
+                const lastSelected = loadedConversations.find(c => c.id === lastConversationId);
+                if (activeView === 'chats') {
+                   setSelectedConversation(lastSelected || loadedConversations[0]);
+                }
+            }
         } else if (loadedConversations.length === 0) {
             setSelectedConversation(null);
         }
@@ -509,7 +512,7 @@ export default function ChatPage() {
   
     return () => unsubscribe();
   
-  }, [selectedConversation?.id, selectedConversation?.call, currentUser?.id, isCallModalOpen, handleHangUp]);
+  }, [selectedConversation?.id, currentUser?.id, isCallModalOpen, handleHangUp]);
   
   const setupNotifications = useCallback(async (user: UserData) => {
     if (typeof window === 'undefined' || !('serviceWorker' in navigator) || !('Notification' in window) || !app) {
@@ -575,7 +578,7 @@ export default function ChatPage() {
       } finally {
         setRegenerateConfirmOpen(false);
       }
-  }, [currentUser, toast]);
+  }, [currentUser, toast, generateUniqueCode]);
 
   // Regeneration Timer effect
   useEffect(() => {
@@ -1764,7 +1767,7 @@ export default function ChatPage() {
                   </div>
               </header>
               <ScrollArea className="flex-1">
-                  {conversations.map(conv => (
+                  {conversations.length > 0 ? conversations.map(conv => (
                       <div key={conv.id} onClick={() => handleConversationSelect(conv)} className="flex items-center gap-3 p-4 cursor-pointer hover:bg-muted border-b">
                           <Avatar className="h-10 w-10">
                               <AvatarImage src={conv.avatar} alt={conv.name} />
@@ -1777,7 +1780,11 @@ export default function ChatPage() {
                               </p>
                           </div>
                       </div>
-                  ))}
+                  )) : (
+                    <div className="flex items-center justify-center h-full text-muted-foreground">
+                        <p>No conversations yet. Add a contact to start chatting!</p>
+                    </div>
+                  )}
               </ScrollArea>
               </>
             )
@@ -1803,4 +1810,3 @@ export default function ChatPage() {
   );
 }
 
-    
