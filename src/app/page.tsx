@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { SidebarProvider, Sidebar, SidebarInset, SidebarHeader, SidebarTrigger, SidebarContent, SidebarMenu, SidebarMenuItem, SidebarMenuButton, SidebarFooter } from '@/components/ui/sidebar';
+import { SheetTitle } from '@/components/ui/sheet';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -1053,6 +1054,7 @@ export default function ChatPage() {
     <SidebarProvider>
       <div className="flex min-h-screen bg-background">
         <Sidebar>
+          <SheetTitle className="sr-only">Main Navigation</SheetTitle>
             <div className="flex h-full flex-col">
                 <SidebarHeader>
                     <div className="flex items-center gap-2">
