@@ -979,11 +979,45 @@ export default function ChatPage() {
                 </div>
               </div>
                 <div className="flex items-center">
-                    <DialogTrigger asChild>
-                        <Button variant="ghost" size="icon" className="h-7 w-7 flex-shrink-0" onClick={() => setEditProfileOpen(true)}>
-                            <Edit className="h-4 w-4" />
-                        </Button>
-                    </DialogTrigger>
+                    <Dialog open={isEditProfileOpen} onOpenChange={setEditProfileOpen}>
+                        <DialogTrigger asChild>
+                            <Button variant="ghost" size="icon" className="h-7 w-7 flex-shrink-0">
+                                <Edit className="h-4 w-4" />
+                            </Button>
+                        </DialogTrigger>
+                        <DialogContent>
+                            <DialogHeader>
+                                <DialogTitle>Edit Your Profile</DialogTitle>
+                                <DialogDescription>
+                                    Change your display name and avatar URL. Click save when you're done.
+                                </DialogDescription>
+                            </DialogHeader>
+                            <div className="grid gap-4 py-4">
+                                <div className="grid grid-cols-4 items-center gap-4">
+                                    <Label htmlFor="profile-name" className="text-right">Name</Label>
+                                    <Input
+                                        id="profile-name"
+                                        value={editProfileName}
+                                        onChange={(e) => setEditProfileName(e.target.value)}
+                                        className="col-span-3"
+                                    />
+                                </div>
+                                <div className="grid grid-cols-4 items-center gap-4">
+                                    <Label htmlFor="profile-avatar" className="text-right">Avatar URL</Label>
+                                    <Input
+                                        id="profile-avatar"
+                                        value={editProfileAvatar}
+                                        onChange={(e) => setEditProfileAvatar(e.target.value)}
+                                        className="col-span-3"
+                                        placeholder="https://example.com/image.png"
+                                    />
+                                </div>
+                            </div>
+                            <DialogFooter>
+                                <Button onClick={handleEditProfile}>Save Changes</Button>
+                            </DialogFooter>
+                        </DialogContent>
+                    </Dialog>
                     <Dialog open={isSwitchAccountOpen} onOpenChange={setSwitchAccountOpen}>
                       <DialogTrigger asChild>
                         <Button variant="ghost" size="icon" className="h-7 w-7 flex-shrink-0">
@@ -1239,7 +1273,7 @@ export default function ChatPage() {
       </div>
       {renderCallModal()}
       {renderRegenDialog()}
-      {renderEditProfileDialog()}
+      {/*renderEditProfileDialog()*/}
       <audio ref={remoteAudioRef} autoPlay playsInline />
     </SidebarProvider>
   );
