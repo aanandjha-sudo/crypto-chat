@@ -23,11 +23,12 @@ export async function generateContactCode(): Promise<GenerateContactCodeOutput> 
 
 const prompt = ai.definePrompt({
   name: 'generateContactCodePrompt',
+  output: { schema: GenerateContactCodeOutputSchema },
   prompt: `You are an expert in creating short, memorable, and unique user codes.
 Generate a contact code that is a combination of two random, simple, lowercase English words and a 3-digit number.
 For example: "blue-tree-123" or "happy-sun-789".
 The words should be common and easy to spell.
-Do not include any other text or explanation.`,
+Your output should be a JSON object with a "code" field.`,
 });
 
 const generateContactCodeFlow = ai.defineFlow(
@@ -44,7 +45,14 @@ const generateContactCodeFlow = ai.defineFlow(
     while (!isUnique && attempts < maxAttempts) {
         attempts++;
         const {output} = await prompt();
-        const generatedCode = output!.code.trim();
+        
+        if (!output) {
+            // Add a check to handle the case where output is null
+            console.error("The AI model did not return a valid output.");
+            continue; // try again
+        }
+        
+        const generatedCode = output.code.trim();
 
         // Check if the code already exists in Firestore
         const q = query(collection(db, 'users'), where('contactCode', '==', generatedCode));
