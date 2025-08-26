@@ -89,11 +89,11 @@ export default function ChatPage() {
         let docSnap = await getDoc(userDocRef);
         if (!docSnap.exists()) {
           // This case should ideally be handled on the login page, but as a fallback:
-          const { code } = await generateContactCode();
+          const newCode = await generateUniqueCode();
           const newUser: Partial<UserData> & {name: string, avatar: string} = { 
               name: currentUser.displayName || `Guest-${currentUser.uid.substring(0,5)}`, 
               avatar: currentUser.photoURL || `https://picsum.photos/seed/${currentUser.uid}/100/100`,
-              contactCode: code, 
+              contactCode: newCode, 
               contacts: [], 
           };
           await setDoc(userDocRef, newUser);
@@ -226,11 +226,31 @@ export default function ChatPage() {
     }
   };
   
+  const generateUniqueCode = async () => {
+    let isUnique = false;
+    let newCode = '';
+    let attempts = 0;
+    const maxAttempts = 10;
+    while (!isUnique && attempts < maxAttempts) {
+      attempts++;
+      const { code } = await generateContactCode();
+      const q = query(collection(db, "users"), where("contactCode", "==", code));
+      const querySnapshot = await getDocs(q);
+      if (querySnapshot.empty) {
+        isUnique = true;
+        newCode = code;
+      }
+    }
+    if (!isUnique) {
+      throw new Error("Failed to generate a unique contact code after several attempts.");
+    }
+    return newCode;
+  }
+
   const handleGenerateCode = async () => {
     if (!user) return;
     try {
-      const result = await generateContactCode();
-      const newCode = result.code;
+      const newCode = await generateUniqueCode();
       const userDocRef = doc(db, 'users', user.uid);
       await updateDoc(userDocRef, { contactCode: newCode });
       setUserData(prev => prev ? {...prev, contactCode: newCode} : null);

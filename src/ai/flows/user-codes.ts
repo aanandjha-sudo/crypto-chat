@@ -9,8 +9,6 @@
 
 import {ai} from '@/ai/genkit';
 import {z} from 'genkit';
-import { collection, getDocs, query, where } from 'firebase/firestore';
-import { db } from '@/lib/firebase';
 
 const GenerateContactCodeOutputSchema = z.object({
   code: z.string().describe('The unique contact code.'),
@@ -37,36 +35,11 @@ const generateContactCodeFlow = ai.defineFlow(
     outputSchema: GenerateContactCodeOutputSchema,
   },
   async () => {
-    let isUnique = false;
-    let code = '';
-    let attempts = 0;
-    const maxAttempts = 10;
-    
-    while (!isUnique && attempts < maxAttempts) {
-        attempts++;
-        const {output} = await prompt();
-        
-        if (!output) {
-            // Add a check to handle the case where output is null
-            console.error("The AI model did not return a valid output.");
-            continue; // try again
-        }
-        
-        const generatedCode = output.code.trim();
-
-        // Check if the code already exists in Firestore
-        const q = query(collection(db, 'users'), where('contactCode', '==', generatedCode));
-        const querySnapshot = await getDocs(q);
-        if (querySnapshot.empty) {
-            isUnique = true;
-            code = generatedCode;
-        }
+    // The flow now only generates a code. Uniqueness check is moved to the client.
+    const {output} = await prompt();
+    if (!output) {
+      throw new Error("The AI model did not return a valid output.");
     }
-
-    if (!isUnique) {
-      throw new Error("Failed to generate a unique contact code after several attempts.");
-    }
-
-    return { code };
+    return { code: output.code.trim() };
   }
 );

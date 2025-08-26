@@ -5,13 +5,34 @@ import { useRouter } from 'next/navigation';
 import { GoogleAuthProvider, signInWithPopup, signInAnonymously } from 'firebase/auth';
 import { auth, db } from '@/lib/firebase';
 import { useToast } from '@/hooks/use-toast';
-import { doc, setDoc, getDoc } from 'firebase/firestore';
+import { doc, setDoc, getDoc, query, where, getDocs, collection } from 'firebase/firestore';
 import { generateContactCode } from '@/ai/flows/user-codes';
 import { Chrome } from 'lucide-react';
 
 export default function LoginPage() {
   const router = useRouter();
   const { toast } = useToast();
+
+  const generateUniqueCode = async () => {
+    let isUnique = false;
+    let newCode = '';
+    let attempts = 0;
+    const maxAttempts = 10;
+    while (!isUnique && attempts < maxAttempts) {
+      attempts++;
+      const { code } = await generateContactCode();
+      const q = query(collection(db, "users"), where("contactCode", "==", code));
+      const querySnapshot = await getDocs(q);
+      if (querySnapshot.empty) {
+        isUnique = true;
+        newCode = code;
+      }
+    }
+    if (!isUnique) {
+      throw new Error("Failed to generate a unique contact code after several attempts.");
+    }
+    return newCode;
+  }
 
   const handleGoogleLogin = async () => {
     const provider = new GoogleAuthProvider();
@@ -23,12 +44,12 @@ export default function LoginPage() {
       const userDocRef = doc(db, 'users', user.uid);
       const userDocSnap = await getDoc(userDocRef);
       if (!userDocSnap.exists()) {
-        const { code } = await generateContactCode();
+        const newCode = await generateUniqueCode();
         await setDoc(userDocRef, {
           name: user.displayName,
           email: user.email,
           avatar: user.photoURL,
-          contactCode: code,
+          contactCode: newCode,
           contacts: [],
         });
       }
@@ -53,12 +74,12 @@ export default function LoginPage() {
         const userDocSnap = await getDoc(userDocRef);
 
         if (!userDocSnap.exists()) {
-            const { code } = await generateContactCode();
+            const newCode = await generateUniqueCode();
             const guestName = `Guest-${user.uid.substring(0, 5)}`;
             await setDoc(userDocRef, {
                 name: guestName,
                 avatar: `https://picsum.photos/seed/${user.uid}/100/100`,
-                contactCode: code,
+                contactCode: newCode,
                 contacts: [],
                 isAnonymous: true,
             });
