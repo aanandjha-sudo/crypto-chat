@@ -1,4 +1,4 @@
-import {initializeApp} from 'firebase/app';
+import {initializeApp, getApps, getApp} from 'firebase/app';
 import {getAuth} from 'firebase/auth';
 import {getFirestore} from 'firebase/firestore';
 
@@ -12,8 +12,8 @@ const firebaseConfig = {
   messagingSenderId: '586118431071',
 };
 
-// Initialize Firebase
-const app = initializeApp(firebaseConfig);
+// Initialize Firebase only if it hasn't been initialized yet
+const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 const auth = getAuth(app);
 const db = getFirestore(app);
 
