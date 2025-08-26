@@ -8,13 +8,14 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { Paperclip, Send, RefreshCw, Users, User, LogOut, Phone, PhoneOff, Mic, MicOff, Copy, Edit, MessageSquare, Contact, Bell, BellOff } from 'lucide-react';
+import { Paperclip, Send, RefreshCw, Users, User, LogOut, Phone, PhoneOff, Mic, MicOff, Copy, Edit, MessageSquare, Contact, Bell, BellOff, Upload } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { triageNotification } from '@/ai/flows/notification-triage';
 import { generateContactCode } from '@/ai/flows/user-codes';
 import { generateLoginCode } from '@/ai/flows/user-login-code';
 import { useToast } from '@/hooks/use-toast';
-import { db, auth, app } from '@/lib/firebase';
+import { db, auth, app, storage } from '@/lib/firebase';
+import { getStorage, ref as storageRef, uploadBytes, getDownloadURL } from "firebase/storage";
 import { getMessaging, getToken, onMessage } from "firebase/messaging";
 import { signInAnonymously, onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
 import { collection, addDoc, query, orderBy, onSnapshot, serverTimestamp, Timestamp, doc, setDoc, getDoc, updateDoc, where, getDocs, DocumentData, writeBatch } from 'firebase/firestore';
@@ -166,6 +167,8 @@ export default function ChatPage() {
   const [isEditProfileOpen, setEditProfileOpen] = useState(false);
   const [editProfileName, setEditProfileName] = useState('');
   const [editProfileAvatar, setEditProfileAvatar] = useState('');
+  const [avatarFile, setAvatarFile] = useState<File | null>(null);
+  const avatarInputRef = useRef<HTMLInputElement>(null);
   
   // Notifications
   const [notificationPermission, setNotificationPermission] = useState<"default" | "granted" | "denied">("default");
@@ -605,10 +608,10 @@ export default function ChatPage() {
 
   const handleStartRegeneration = () => {
     setRegenerateConfirmOpen(false);
-    setRegenerationTimer(120); // 2 minutes
+    setRegenerationTimer(30); // 30 seconds
     toast({
         title: 'Regeneration Started',
-        description: 'A new private code will be generated in 2 minutes. You can cancel this process.',
+        description: 'A new private code will be generated in 30 seconds. You can cancel this process.',
     });
   };
 
@@ -631,16 +634,24 @@ export default function ChatPage() {
       }
 
       try {
+          let newAvatarUrl = currentUser.avatar;
+          if (avatarFile) {
+              const fileRef = storageRef(storage, `avatars/${currentUser.id}/${avatarFile.name}`);
+              const snapshot = await uploadBytes(fileRef, avatarFile);
+              newAvatarUrl = await getDownloadURL(snapshot.ref);
+          }
+
           const userDocRef = doc(db, 'users', currentUser.id);
-          const newAvatar = editProfileAvatar.trim() || `https://picsum.photos/seed/${currentUser.id}/100/100`;
-          await updateDoc(userDocRef, { 
+          const updates: Partial<UserData> = {
               name: editProfileName,
-              avatar: newAvatar,
-          });
-          const updatedUser = { ...currentUser, name: editProfileName, avatar: newAvatar };
+              avatar: newAvatarUrl,
+          };
+          await updateDoc(userDocRef, updates);
+          const updatedUser = { ...currentUser, ...updates };
           setCurrentUser(updatedUser);
           
           toast({ title: 'Profile Updated', description: 'Your profile has been successfully updated.' });
+          setAvatarFile(null);
           setEditProfileOpen(false);
       } catch (error) {
           console.error('Error updating profile:', error);
@@ -1051,7 +1062,7 @@ export default function ChatPage() {
             <AlertDialogHeader>
                 <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
                 <AlertDialogDescription>
-                    This will permanently create a new private login code. Your old code will no longer work. This action will start a 2-minute timer before completing.
+                    This will permanently create a new private login code. Your old code will no longer work. This action will start a 30-second timer before completing.
                 </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
@@ -1095,7 +1106,7 @@ export default function ChatPage() {
                             <DialogHeader>
                                 <DialogTitle>Edit Your Profile</DialogTitle>
                                 <DialogDescription>
-                                    Change your display name and avatar URL. Click save when you're done.
+                                    Change your display name and avatar. Click save when you're done.
                                 </DialogDescription>
                             </DialogHeader>
                             <div className="grid gap-4 py-4">
@@ -1109,14 +1120,24 @@ export default function ChatPage() {
                                     />
                                 </div>
                                 <div className="grid grid-cols-4 items-center gap-4">
-                                    <Label htmlFor="profile-avatar" className="text-right">Avatar URL</Label>
-                                    <Input
-                                        id="profile-avatar"
-                                        value={editProfileAvatar}
-                                        onChange={(e) => setEditProfileAvatar(e.target.value)}
-                                        className="col-span-3"
-                                        placeholder="https://example.com/image.png"
-                                    />
+                                    <Label className="text-right">Avatar</Label>
+                                    <div className="col-span-3 flex items-center gap-2">
+                                        <Avatar>
+                                            <AvatarImage src={avatarFile ? URL.createObjectURL(avatarFile) : editProfileAvatar} />
+                                            <AvatarFallback>{editProfileName.charAt(0) || '?'}</AvatarFallback>
+                                        </Avatar>
+                                        <Button variant="outline" size="sm" onClick={() => avatarInputRef.current?.click()}>
+                                            <Upload className="mr-2 h-4 w-4" />
+                                            Upload
+                                        </Button>
+                                        <Input 
+                                            type="file" 
+                                            accept="image/*"
+                                            className="hidden" 
+                                            ref={avatarInputRef} 
+                                            onChange={(e) => setAvatarFile(e.target.files?.[0] || null)}
+                                        />
+                                    </div>
                                 </div>
                             </div>
                             <DialogFooter>
