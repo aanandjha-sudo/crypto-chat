@@ -26,6 +26,7 @@ const prompt = ai.definePrompt({
   prompt: `You are an expert in creating short, memorable, and unique user codes.
 Generate a contact code that is a combination of two random, simple, lowercase English words and a 3-digit number.
 For example: "blue-tree-123" or "happy-sun-789".
+The words should be common and easy to spell.
 Do not include any other text or explanation.`,
 });
 
@@ -37,10 +38,13 @@ const generateContactCodeFlow = ai.defineFlow(
   async () => {
     let isUnique = false;
     let code = '';
+    let attempts = 0;
+    const maxAttempts = 10;
     
-    while (!isUnique) {
+    while (!isUnique && attempts < maxAttempts) {
+        attempts++;
         const {output} = await prompt();
-        const generatedCode = output!.code;
+        const generatedCode = output!.code.trim();
 
         // Check if the code already exists in Firestore
         const q = query(collection(db, 'users'), where('contactCode', '==', generatedCode));
@@ -49,6 +53,10 @@ const generateContactCodeFlow = ai.defineFlow(
             isUnique = true;
             code = generatedCode;
         }
+    }
+
+    if (!isUnique) {
+      throw new Error("Failed to generate a unique contact code after several attempts.");
     }
 
     return { code };
