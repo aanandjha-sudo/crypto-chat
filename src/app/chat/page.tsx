@@ -12,7 +12,8 @@ import { triageNotification } from '@/ai/flows/notification-triage';
 import { generateContactCode } from '@/ai/flows/user-codes';
 import { generateLoginCode } from '@/ai/flows/user-login-code';
 import { useToast } from '@/hooks/use-toast';
-import { db } from '@/lib/firebase';
+import { db, auth } from '@/lib/firebase';
+import { signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { collection, addDoc, query, orderBy, onSnapshot, serverTimestamp, Timestamp, doc, setDoc, getDoc, updateDoc, where, getDocs, DocumentData, writeBatch } from 'firebase/firestore';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from "@/components/ui/checkbox"
@@ -137,27 +138,26 @@ export default function ChatPage() {
     return newCode;
   }
   
-  const createNewUser = useCallback(async () => {
+  const createNewUser = useCallback(async (userId: string) => {
     try {
-      const newUserId = doc(collection(db, 'users')).id;
       const [newContactCode, newLoginCode] = await Promise.all([
           generateUniqueCode('contact'),
           generateUniqueCode('login')
       ]);
 
       const newUser: UserData = {
-          id: newUserId,
-          name: `Guest-${newUserId.substring(0, 5)}`,
-          avatar: `https://picsum.photos/seed/${newUserId}/100/100`,
+          id: userId,
+          name: `Guest-${userId.substring(0, 5)}`,
+          avatar: `https://picsum.photos/seed/${userId}/100/100`,
           contactCode: newContactCode,
           loginCode: newLoginCode,
           contacts: [],
       };
       
-      const userDocRef = doc(db, 'users', newUserId);
+      const userDocRef = doc(db, 'users', userId);
       await setDoc(userDocRef, newUser);
       
-      localStorage.setItem('currentUserId', newUserId);
+      localStorage.setItem('currentUserId', userId);
       return newUser;
     } catch(error) {
       console.error("Failed to create new user:", error);
@@ -168,33 +168,55 @@ export default function ChatPage() {
 
 
   useEffect(() => {
-    const initializeUser = async () => {
-        setLoading(true);
-        const userId = localStorage.getItem('currentUserId');
-        let user: UserData | null = null;
+    const initializeUser = async (firebaseUser: import('firebase/auth').User | null) => {
+        if (!firebaseUser) {
+          try {
+            await signInAnonymously(auth);
+          } catch (error) {
+            console.error("Anonymous sign-in failed", error);
+            setLoading(false);
+          }
+          return;
+        }
 
-        if (userId) {
+        setLoading(true);
+        const userId = localStorage.getItem('currentUserId') || firebaseUser.uid;
+        let user: UserData | null = null;
+        
+        if (userId !== firebaseUser.uid) {
+            // This case handles switching accounts via private code
+             const userDocRef = doc(db, 'users', userId);
+             const docSnap = await getDoc(userDocRef);
+             if (docSnap.exists()) {
+                 user = { id: docSnap.id, ...docSnap.data() } as UserData;
+             } else {
+                 // The code is invalid, fall back to current firebase user
+                 localStorage.setItem('currentUserId', firebaseUser.uid);
+                 user = await createNewUser(firebaseUser.uid);
+             }
+        } else {
             const userDocRef = doc(db, 'users', userId);
             const docSnap = await getDoc(userDocRef);
             if (docSnap.exists()) {
                 user = { id: docSnap.id, ...docSnap.data() } as UserData;
             } else {
-                // User ID in storage, but no profile in DB -> create new one
-                user = await createNewUser();
+                user = await createNewUser(userId);
             }
-        } else {
-             // No user ID in storage -> create new one
-            user = await createNewUser();
         }
 
         setCurrentUser(user);
         if (user) {
             setEditProfileName(user.name);
             setEditProfileAvatar(user.avatar);
+            localStorage.setItem('currentUserId', user.id);
         }
         setLoading(false);
     };
-    initializeUser();
+
+    const unsubscribe = onAuthStateChanged(auth, initializeUser);
+    
+    // Cleanup subscription on unmount
+    return () => unsubscribe();
   }, [createNewUser]);
 
   const loadConversations = useCallback(async () => {
@@ -1273,7 +1295,7 @@ export default function ChatPage() {
       </div>
       {renderCallModal()}
       {renderRegenDialog()}
-      {/*renderEditProfileDialog()*/}
+      {renderEditProfileDialog()}
       <audio ref={remoteAudioRef} autoPlay playsInline />
     </SidebarProvider>
   );
