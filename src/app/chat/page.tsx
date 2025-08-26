@@ -8,7 +8,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { Send, RefreshCw, Users, User, Phone, PhoneOff, Mic, MicOff, Copy, Edit, MessageSquare, Contact, Bell, BellOff, Upload, Coffee, SmilePlus, Trash2 } from 'lucide-react';
+import { Send, RefreshCw, Users, User, Phone, PhoneOff, Mic, MicOff, Copy, Edit, MessageSquare, Contact, Bell, BellOff, Upload, Coffee, SmilePlus, Trash2, Paperclip, File, Video, Image as ImageIcon } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { triageNotification } from '@/ai/flows/notification-triage';
@@ -16,12 +16,14 @@ import { generateContactCode } from '@/ai/flows/user-codes';
 import { generateLoginCode } from '@/ai/flows/user-login-code';
 import { useToast } from '@/hooks/use-toast';
 import { db, auth, app, storage } from '@/lib/firebase';
-import { getStorage, ref as storageRef, uploadBytes, getDownloadURL, uploadString } from "firebase/storage";
+import { getStorage, ref as storageRef, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 import { getMessaging, getToken, onMessage } from "firebase/messaging";
 import { signInAnonymously, onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
 import { collection, addDoc, query, orderBy, onSnapshot, serverTimestamp, Timestamp, doc, setDoc, getDoc, updateDoc, where, getDocs, DocumentData, writeBatch } from 'firebase/firestore';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from "@/components/ui/checkbox"
+import NextImage from 'next/image';
+
 import {
   Dialog,
   DialogContent,
@@ -34,6 +36,7 @@ import {
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { ContactList } from '@/components/ContactList';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Progress } from '@/components/ui/progress';
 import { formatDistanceToNow } from 'date-fns';
 
 
@@ -43,8 +46,8 @@ interface Message {
   senderName?: string;
   text?: string;
   timestamp: Timestamp | null;
-  type: 'text' | 'audio';
-  audioUrl?: string;
+  type: 'text' | 'audio' | 'image' | 'video';
+  mediaUrl?: string;
   reactions?: { [key: string]: string[] }; // emoji -> userId[]
 }
 
@@ -177,6 +180,7 @@ export default function ChatPage() {
   const [editProfileAvatar, setEditProfileAvatar] = useState('');
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const avatarInputRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   
   // Notifications
   const [notificationPermission, setNotificationPermission] = useState<"default" | "granted" | "denied">("default");
@@ -187,6 +191,8 @@ export default function ChatPage() {
   
   const [otherUserStatus, setOtherUserStatus] = useState<Contact['status']>('offline');
   const [otherUserLastSeen, setOtherUserLastSeen] = useState<Timestamp | null>(null);
+
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
 
   const EMOJI_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
 
@@ -649,27 +655,48 @@ export default function ChatPage() {
             
             const audioFileRef = storageRef(storage, `audio/${selectedConversation.id}/${Date.now()}.webm`);
             try {
-                const snapshot = await uploadBytes(audioFileRef, audioBlob);
-                const audioUrl = await getDownloadURL(snapshot.ref);
-
-                const messagesColRef = collection(db, 'conversations', selectedConversation.id, 'messages');
-                await addDoc(messagesColRef, {
-                    senderId: currentUser.id,
-                    senderName: currentUser.name,
-                    type: 'audio',
-                    audioUrl: audioUrl,
-                    timestamp: serverTimestamp(),
-                });
-                 // Optional: Triage notification for voice messages
-                await triageNotification({
-                    messageContent: "Sent a voice message",
-                    senderName: currentUser.name,
-                    fcmToken: (await getDoc(doc(db, 'users', selectedConversation.members!.find(id => id !== currentUser.id)!))).data()?.fcmToken
-                });
+                const uploadTask = uploadBytesResumable(audioFileRef, audioBlob);
+                
+                uploadTask.on('state_changed',
+                    (snapshot) => {
+                        const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+                        setUploadProgress(progress);
+                    },
+                    (error) => {
+                         console.error("Error uploading voice message:", error);
+                         toast({ variant: 'destructive', title: "Upload Failed", description: "Could not send the voice message." });
+                         setUploadProgress(null);
+                    },
+                    async () => {
+                        const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
+                        const messagesColRef = collection(db, 'conversations', selectedConversation.id, 'messages');
+                        await addDoc(messagesColRef, {
+                            senderId: currentUser.id,
+                            senderName: currentUser.name,
+                            type: 'audio',
+                            mediaUrl: downloadURL,
+                            timestamp: serverTimestamp(),
+                        });
+                        setUploadProgress(null);
+                        
+                         const recipients = selectedConversation.members?.filter(id => id !== currentUser.id) || [];
+                         for (const recipientId of recipients) {
+                             const userDoc = await getDoc(doc(db, 'users', recipientId));
+                             if(userDoc.exists() && userDoc.data().fcmToken) {
+                                 await triageNotification({
+                                     messageContent: "Sent a voice message",
+                                     senderName: currentUser.name,
+                                     fcmToken: userDoc.data().fcmToken
+                                 });
+                             }
+                         }
+                    }
+                );
 
             } catch (error) {
                 console.error("Error uploading/sending voice message:", error);
                 toast({ variant: 'destructive', title: "Upload Failed", description: "Could not send the voice message." });
+                setUploadProgress(null);
             }
         };
 
@@ -687,6 +714,65 @@ export default function ChatPage() {
         setIsRecording(false);
     }
   };
+
+  const handleFileUpload = (file: File) => {
+    if (!file || !selectedConversation || !currentUser) return;
+    
+    if (file.size > 50 * 1024 * 1024) { // 50MB
+        toast({ variant: "destructive", title: "File too large", description: "Please upload files smaller than 50MB." });
+        return;
+    }
+
+    const isImage = file.type.startsWith('image/');
+    const isVideo = file.type.startsWith('video/');
+    if (!isImage && !isVideo) {
+        toast({ variant: "destructive", title: "Invalid file type", description: "You can only upload images and videos." });
+        return;
+    }
+
+    const fileType = isImage ? 'image' : 'video';
+    const filePath = `${fileType}s/${selectedConversation.id}/${Date.now()}_${file.name}`;
+    const fileRef = storageRef(storage, filePath);
+    const uploadTask = uploadBytesResumable(fileRef, file);
+
+    uploadTask.on('state_changed', 
+        (snapshot) => {
+            const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+            setUploadProgress(progress);
+        },
+        (error) => {
+            console.error(`Error uploading ${fileType}:`, error);
+            toast({ variant: "destructive", title: "Upload Failed", description: `Could not upload the ${fileType}.`});
+            setUploadProgress(null);
+        },
+        async () => {
+            const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
+            const messagesColRef = collection(db, 'conversations', selectedConversation.id, 'messages');
+            await addDoc(messagesColRef, {
+                senderId: currentUser.id,
+                senderName: currentUser.name,
+                type: fileType,
+                mediaUrl: downloadURL,
+                timestamp: serverTimestamp(),
+                text: file.name,
+            });
+
+            setUploadProgress(null);
+
+            const recipients = selectedConversation.members?.filter(id => id !== currentUser.id) || [];
+            for (const recipientId of recipients) {
+                const userDoc = await getDoc(doc(db, 'users', recipientId));
+                if (userDoc.exists() && userDoc.data().fcmToken) {
+                    await triageNotification({
+                        messageContent: `Sent an ${fileType}`,
+                        senderName: currentUser.name,
+                        fcmToken: userDoc.data().fcmToken,
+                    });
+                }
+            }
+        }
+    );
+  }
 
   const handleReaction = async (messageId: string, emoji: string) => {
     if (!selectedConversation || !currentUser) return;
@@ -762,7 +848,7 @@ export default function ChatPage() {
           let newAvatarUrl = currentUser.avatar;
           if (avatarFile) {
               const fileRef = storageRef(storage, `avatars/${currentUser.id}/${avatarFile.name}`);
-              const snapshot = await uploadBytes(fileRef, avatarFile);
+              const snapshot = await uploadBytesResumable(fileRef, avatarFile);
               newAvatarUrl = await getDownloadURL(snapshot.ref);
           }
 
@@ -1373,9 +1459,43 @@ export default function ChatPage() {
         </main>
       </>
   );
+  
+  const renderMessageContent = (message: Message) => {
+    switch (message.type) {
+        case 'text':
+            return <p className="text-sm">{message.text}</p>;
+        case 'audio':
+            return <audio controls src={message.mediaUrl} className="max-w-full"></audio>;
+        case 'image':
+            return (
+                <a href={message.mediaUrl} target="_blank" rel="noopener noreferrer">
+                    <NextImage 
+                        src={message.mediaUrl!} 
+                        alt={message.text || 'Image'}
+                        width={300}
+                        height={300}
+                        className="rounded-lg object-cover max-w-xs"
+                    />
+                </a>
+            );
+        case 'video':
+            return (
+                <video controls src={message.mediaUrl} className="rounded-lg max-w-xs"></video>
+            );
+        default:
+            return <p className="text-sm text-red-500">Unsupported message type</p>
+    }
+  }
 
   return (
     <div className="flex min-h-screen bg-background">
+       <input 
+        type="file" 
+        ref={fileInputRef} 
+        className="hidden"
+        accept="image/*,video/*"
+        onChange={(e) => e.target.files && handleFileUpload(e.target.files[0])}
+       />
       <Sidebar>
         <SheetTitle className="sr-only">Main Navigation</SheetTitle>
           <div className="flex h-full flex-col">
@@ -1557,13 +1677,9 @@ export default function ChatPage() {
                                   <span className="text-xs text-muted-foreground px-3">{sender.name}</span>
                               )}
                               <div className="relative">
-                                <Card className={`rounded-2xl p-3 max-w-sm md:max-w-md ${isUser ? 'bg-primary text-primary-foreground' : 'bg-muted'}`}>
+                                <Card className={`rounded-2xl max-w-sm md:max-w-md ${isUser ? 'bg-primary text-primary-foreground' : 'bg-muted'} ${message.type === 'text' ? 'p-3' : 'p-1'}`}>
                                     <CardContent className="p-0">
-                                        {message.type === 'audio' && message.audioUrl ? (
-                                            <audio controls src={message.audioUrl} className="max-w-full"></audio>
-                                        ) : (
-                                            <p className="text-sm">{message.text}</p>
-                                        )}
+                                      {renderMessageContent(message)}
                                     </CardContent>
                                 </Card>
                                 <Popover>
@@ -1602,31 +1718,41 @@ export default function ChatPage() {
                   </div>
                 </ScrollArea>
                 <footer className="border-t bg-background p-4">
-                  <form onSubmit={handleSendMessage} className="relative">
-                    <Input
-                      placeholder="Type a message..."
-                      className="pr-16"
-                      value={newMessage}
-                      onChange={(e) => setNewMessage(e.target.value)}
-                    />
-                    <div className="absolute inset-y-0 right-0 flex items-center">
-                       <Button 
-                          variant="ghost" 
-                          size="icon" 
-                          type="button" 
-                          onMouseDown={handleStartRecording} 
-                          onMouseUp={handleStopRecording} 
-                          onTouchStart={handleStartRecording} 
-                          onTouchEnd={handleStopRecording}
-                          className={isRecording ? 'text-red-500' : ''}
-                        >
-                          <Mic className="h-5 w-5" />
-                       </Button>
-                      <Button variant="ghost" size="icon" type="submit">
-                        <Send className="h-5 w-5" />
-                      </Button>
-                    </div>
-                  </form>
+                  {uploadProgress !== null ? (
+                      <div className="flex items-center gap-2">
+                        <Progress value={uploadProgress} className="w-full" />
+                        <span className="text-sm text-muted-foreground">{Math.round(uploadProgress)}%</span>
+                      </div>
+                  ) : (
+                    <form onSubmit={handleSendMessage} className="relative">
+                      <Input
+                        placeholder="Type a message..."
+                        className="pr-24"
+                        value={newMessage}
+                        onChange={(e) => setNewMessage(e.target.value)}
+                      />
+                      <div className="absolute inset-y-0 right-0 flex items-center">
+                         <Button variant="ghost" size="icon" type="button" onClick={() => fileInputRef.current?.click()}>
+                           <Paperclip className="h-5 w-5" />
+                         </Button>
+                         <Button 
+                            variant="ghost" 
+                            size="icon" 
+                            type="button" 
+                            onMouseDown={handleStartRecording} 
+                            onMouseUp={handleStopRecording} 
+                            onTouchStart={handleStartRecording} 
+                            onTouchEnd={handleStopRecording}
+                            className={isRecording ? 'text-red-500' : ''}
+                          >
+                            <Mic className="h-5 w-5" />
+                         </Button>
+                        <Button variant="ghost" size="icon" type="submit">
+                          <Send className="h-5 w-5" />
+                        </Button>
+                      </div>
+                    </form>
+                  )}
                 </footer>
               </>
             ) : (
@@ -1676,3 +1802,5 @@ export default function ChatPage() {
     </div>
   );
 }
+
+    
