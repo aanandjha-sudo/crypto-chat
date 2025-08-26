@@ -8,7 +8,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Card, CardHeader, CardContent, CardTitle, CardDescription } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { Send, RefreshCw, Users, User, Phone, PhoneOff, Mic, MicOff, Copy, Edit, MessageSquare, Contact, Bell, BellOff, Upload, Coffee, SmilePlus, Trash2, Paperclip, File, Video, Image as ImageIcon, Swords } from 'lucide-react';
+import { Send, RefreshCw, Users, User, Phone, PhoneOff, Mic, MicOff, Copy, Edit, MessageSquare, Contact, Bell, BellOff, Upload, Coffee, SmilePlus, Trash2, Paperclip, File, Video, Image as ImageIcon, Swords, BrainCircuit } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { triageNotification } from '@/ai/flows/notification-triage';
@@ -38,6 +38,7 @@ import { ContactList } from '@/components/ContactList';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Progress } from '@/components/ui/progress';
 import { formatDistanceToNow } from 'date-fns';
+import { TicTacToe } from '@/components/TicTacToe';
 
 
 interface Message {
@@ -1472,24 +1473,16 @@ export default function ChatPage() {
           </div>
         </header>
         <main className="flex-1 p-4 md:p-6">
-            <Card>
-                <CardHeader>
-                    <CardTitle>2-Player Games</CardTitle>
-                    <CardDescription>Challenge your contacts to a friendly game.</CardDescription>
-                </CardHeader>
-                <CardContent>
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                        <Card className="flex flex-col items-center justify-center p-6 hover:bg-muted cursor-pointer transition-colors">
-                            <Swords className="h-12 w-12 text-muted-foreground mb-2" />
-                            <p className="font-semibold">Tic-Tac-Toe</p>
-                            <p className="text-sm text-muted-foreground">Coming Soon</p>
-                        </Card>
-                         <Card className="flex flex-col items-center justify-center p-6 bg-muted/50 cursor-not-allowed">
-                            <p className="font-semibold text-muted-foreground">More Games Coming Soon...</p>
-                        </Card>
-                    </div>
-                </CardContent>
-            </Card>
+           {selectedConversation && currentUser ? (
+                 <TicTacToe conversationId={selectedConversation.id} currentUser={currentUser} />
+           ): (
+                <Card>
+                    <CardHeader>
+                        <CardTitle>Select a Conversation</CardTitle>
+                        <CardDescription>Please select a private chat from the sidebar to start a game with a contact.</CardDescription>
+                    </CardHeader>
+                </Card>
+           )}
         </main>
       </>
   );
@@ -1851,5 +1844,4 @@ export default function ChatPage() {
     </div>
   );
 }
-
 
