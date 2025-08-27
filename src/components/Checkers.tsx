@@ -237,7 +237,7 @@ export function Checkers({ conversationId, currentUser }: CheckersProps) {
         
         if (winner) {
             if (winner === 'draw') return "It's a draw!";
-            const winnerName = players[winner] === currentUser.id ? "You" : "Opponent";
+            const winnerName = players[winner as Player] === currentUser.id ? "You" : "Opponent";
             return `${winnerName} won!`;
         }
 
@@ -330,5 +330,3 @@ export function Checkers({ conversationId, currentUser }: CheckersProps) {
         </Card>
     );
 }
-
-    
