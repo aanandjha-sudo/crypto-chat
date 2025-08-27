@@ -41,7 +41,6 @@ import { Progress } from '@/components/ui/progress';
 import { formatDistanceToNow } from 'date-fns';
 import { TicTacToe } from '@/components/TicTacToe';
 import { ConnectFour } from '@/components/ConnectFour';
-import { Checkers } from '@/components/Checkers';
 import { RockPaperScissors } from '@/components/RockPaperScissors';
 import { MemoryMatch } from '@/components/MemoryMatch';
 import { useTheme } from '@/components/ThemeProvider';
@@ -102,7 +101,7 @@ type CallState = {
 }
 
 type ActiveView = 'chats' | 'contacts' | 'profile' | 'games';
-type ActiveGame = 'tictactoe' | 'connectfour' | 'checkers' | 'rockpaperscissors' | 'memorymatch' | null;
+type ActiveGame = 'tictactoe' | 'connectfour' | 'rockpaperscissors' | 'memorymatch' | null;
 
 interface GameInvite {
     messageId: string;
@@ -433,7 +432,7 @@ export default function ChatPage() {
     const unsubscribe = onSnapshot(q, (querySnapshot) => {
       const msgs: Message[] = [];
       querySnapshot.forEach((doc) => {
-        const { id: _, ...msgData } = doc.data() as Message; // Exclude id if it exists
+        const { id: _, ...msgData } = doc.data(); 
         if(currentUser && msgData.type === 'game_invite' && msgData.senderId !== currentUser.id && msgData.game?.status === 'pending' && !activeGame) {
              setGameInvite({
                 messageId: doc.id,
@@ -1583,7 +1582,6 @@ export default function ChatPage() {
   const gameComponents: Record<NonNullable<ActiveGame>, React.ComponentType<any>> = {
     tictactoe: TicTacToe,
     connectfour: ConnectFour,
-    checkers: Checkers,
     rockpaperscissors: RockPaperScissors,
     memorymatch: MemoryMatch,
   };
@@ -1644,12 +1642,6 @@ export default function ChatPage() {
                         <CardHeader>
                             <CardTitle>Connect Four</CardTitle>
                             <CardDescription>Drop your discs and be the first to get four in a row to win.</CardDescription>
-                        </CardHeader>
-                    </Card>
-                    <Card className="cursor-pointer hover:bg-muted" onClick={() => handleSendGameInvite('checkers', 'Checkers')}>
-                        <CardHeader>
-                            <CardTitle>Checkers</CardTitle>
-                            <CardDescription>The classic game of strategy. Capture all your opponent's pieces to win.</CardDescription>
                         </CardHeader>
                     </Card>
                     <Card className="cursor-pointer hover:bg-muted" onClick={() => handleSendGameInvite('rockpaperscissors', 'Rock, Paper, Scissors')}>
