@@ -14,6 +14,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { triageNotification } from '@/ai/flows/notification-triage';
 import { generateContactCode } from '@/ai/flows/user-codes';
 import { generateLoginCode } from '@/ai/flows/user-login-code';
+import { sendGameInvite } from '@/ai/flows/game-invite';
 import { useToast } from '@/hooks/use-toast';
 import { db, auth, app, storage } from '@/lib/firebase';
 import { getStorage, ref as storageRef, uploadBytesResumable, getDownloadURL } from "firebase/storage";
@@ -51,9 +52,14 @@ interface Message {
   senderName?: string;
   text?: string;
   timestamp: Timestamp | null;
-  type: 'text' | 'audio' | 'image' | 'video';
+  type: 'text' | 'audio' | 'image' | 'video' | 'game_invite' | 'game_response';
   mediaUrl?: string;
   reactions?: { [key: string]: string[] }; // emoji -> userId[]
+  game?: {
+    id: string;
+    name: string;
+    status: 'pending' | 'accepted' | 'declined';
+  }
 }
 
 export interface Contact {
@@ -95,6 +101,13 @@ type CallState = {
 
 type ActiveView = 'chats' | 'contacts' | 'profile' | 'games';
 type ActiveGame = 'tictactoe' | 'connectfour' | 'checkers' | 'rockpaperscissors' | 'memorymatch' | null;
+
+interface GameInvite {
+    messageId: string;
+    inviterName: string;
+    gameName: string;
+    gameId: string;
+}
 
 function ChatSkeleton() {
     return (
@@ -162,6 +175,7 @@ export default function ChatPage() {
   const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null);
   const [activeView, setActiveView] = useState<ActiveView>('chats');
   const [activeGame, setActiveGame] = useState<ActiveGame>(null);
+  const [gameInvite, setGameInvite] = useState<GameInvite | null>(null);
 
   // Add Contact states
   const [addContactCode, setAddContactCode] = useState('');
@@ -366,7 +380,8 @@ export default function ChatPage() {
              const currentSelectedExists = loadedConversations.some(c => c.id === selectedConversation?.id)
              if(!selectedConversation || !currentSelectedExists) {
                 const lastSelected = loadedConversations.find(c => c.id === lastConversationId);
-                if (activeView === 'chats') {
+                // Only auto-select conversation if we are in chat or game view initially
+                if (activeView === 'chats' || activeView === 'games') {
                    setSelectedConversation(lastSelected || loadedConversations[0]);
                 }
             }
@@ -415,7 +430,16 @@ export default function ChatPage() {
     const unsubscribe = onSnapshot(q, (querySnapshot) => {
       const msgs: Message[] = [];
       querySnapshot.forEach((doc) => {
-        msgs.push({ id: doc.id, ...doc.data() } as Message);
+        const msgData = doc.data() as Message;
+        if(currentUser && msgData.type === 'game_invite' && msgData.senderId !== currentUser.id && msgData.game?.status === 'pending' && !activeGame) {
+             setGameInvite({
+                messageId: doc.id,
+                inviterName: msgData.senderName || 'A player',
+                gameName: msgData.game.name,
+                gameId: msgData.game.id,
+            });
+        }
+        msgs.push({ id: doc.id, ...msgData });
       });
       setMessages(msgs);
     }, (error) => {
@@ -424,7 +448,7 @@ export default function ChatPage() {
     });
 
     return () => unsubscribe();
-  }, [selectedConversation, toast, activeView]);
+  }, [selectedConversation, toast, activeView, currentUser, activeGame]);
   
   useEffect(() => {
     let unsubscribe: (() => void) | undefined;
@@ -1211,6 +1235,61 @@ export default function ChatPage() {
     }
   }
 
+  const handleGameConversationSelect = (conv: Conversation) => {
+    setSelectedConversation(conv);
+    if(isMobile) {
+        setOpenMobile(false);
+    }
+  }
+  
+  const handleSendGameInvite = async (gameId: ActiveGame, gameName: string) => {
+    if (!selectedConversation || !currentUser || !gameId) return;
+
+    try {
+        await sendGameInvite({
+            conversationId: selectedConversation.id,
+            inviterId: currentUser.id,
+            inviterName: currentUser.name,
+            gameId,
+            gameName,
+        });
+        toast({
+            title: 'Invitation Sent!',
+            description: `Your invitation to play ${gameName} has been sent to ${selectedConversation.name}.`,
+        });
+    } catch (error) {
+        console.error("Error sending game invite:", error);
+        toast({
+            variant: "destructive",
+            title: "Invite Error",
+            description: "Could not send the game invitation.",
+        });
+    }
+  };
+  
+  const handleGameInviteResponse = async (accepted: boolean) => {
+    if (!gameInvite || !selectedConversation) return;
+
+    const messageRef = doc(db, 'conversations', selectedConversation.id, 'messages', gameInvite.messageId);
+
+    try {
+        await updateDoc(messageRef, { 'game.status': accepted ? 'accepted' : 'declined' });
+
+        if(accepted) {
+            setActiveGame(gameInvite.gameId as ActiveGame);
+            setActiveView('games');
+        } else {
+            toast({ title: 'Invitation Declined', description: `You have declined the invitation to play ${gameInvite.gameName}.` });
+        }
+    } catch(error) {
+        console.error("Error responding to game invite:", error);
+        toast({ variant: 'destructive', title: 'Error', description: 'Could not respond to the invitation.' });
+    } finally {
+        setGameInvite(null);
+    }
+  };
+
+
   if (loading || !currentUser) {
     return <ChatSkeleton />;
   }
@@ -1495,42 +1574,60 @@ export default function ChatPage() {
           </div>
         </header>
         <main className="flex-1 p-4 md:p-6">
-           {!selectedConversation || selectedConversation.type !== 'private' ? (
-                <Card>
+           {GameComponent ? (
+                <GameComponent conversationId={selectedConversation!.id} currentUser={currentUser} />
+           ) : (
+                <>
+                <Card className="mb-6">
                     <CardHeader>
                         <CardTitle>Select a Conversation</CardTitle>
-                        <CardDescription>Please select a private one-on-one chat from the sidebar to start a game with a contact.</CardDescription>
+                        <CardDescription>Choose a one-on-one chat to play a game with.</CardDescription>
                     </CardHeader>
+                    <CardContent>
+                        <ScrollArea className="h-40 border rounded-md">
+                            {conversations.filter(c => c.type === 'private').map(conv => (
+                                <div key={conv.id} onClick={() => handleGameConversationSelect(conv)} className={`flex items-center gap-3 p-4 cursor-pointer hover:bg-muted border-b ${selectedConversation?.id === conv.id ? 'bg-muted' : ''}`}>
+                                    <Avatar className="h-10 w-10">
+                                        <AvatarImage src={conv.avatar} alt={conv.name} />
+                                        <AvatarFallback>{conv.name.charAt(0) || '?'}</AvatarFallback>
+                                    </Avatar>
+                                    <div className="flex-1">
+                                        <p className="font-semibold">{conv.name}</p>
+                                    </div>
+                                </div>
+                            ))}
+                             {conversations.filter(c => c.type === 'private').length === 0 && (
+                                <div className="p-4 text-center text-muted-foreground">No private chats available.</div>
+                            )}
+                        </ScrollArea>
+                    </CardContent>
                 </Card>
-           ) : GameComponent ? (
-                <GameComponent conversationId={selectedConversation.id} currentUser={currentUser} />
-           ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    <Card className="cursor-pointer hover:bg-muted" onClick={() => setActiveGame('tictactoe')}>
+                <div className={`grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 ${!selectedConversation || selectedConversation.type !== 'private' ? 'opacity-50 pointer-events-none' : ''}`}>
+                    <Card className="cursor-pointer hover:bg-muted" onClick={() => handleSendGameInvite('tictactoe', 'Tic-Tac-Toe')}>
                         <CardHeader>
                             <CardTitle>Tic-Tac-Toe</CardTitle>
                             <CardDescription>The classic game of X's and O's. First to get 3 in a row wins.</CardDescription>
                         </CardHeader>
                     </Card>
-                    <Card className="cursor-pointer hover:bg-muted" onClick={() => setActiveGame('connectfour')}>
+                    <Card className="cursor-pointer hover:bg-muted" onClick={() => handleSendGameInvite('connectfour', 'Connect Four')}>
                         <CardHeader>
                             <CardTitle>Connect Four</CardTitle>
                             <CardDescription>Drop your discs and be the first to get four in a row to win.</CardDescription>
                         </CardHeader>
                     </Card>
-                    <Card className="cursor-pointer hover:bg-muted" onClick={() => setActiveGame('checkers')}>
+                    <Card className="cursor-pointer hover:bg-muted" onClick={() => handleSendGameInvite('checkers', 'Checkers')}>
                         <CardHeader>
                             <CardTitle>Checkers</CardTitle>
                             <CardDescription>The classic game of strategy. Capture all your opponent's pieces to win.</CardDescription>
                         </CardHeader>
                     </Card>
-                    <Card className="cursor-pointer hover:bg-muted" onClick={() => setActiveGame('rockpaperscissors')}>
+                    <Card className="cursor-pointer hover:bg-muted" onClick={() => handleSendGameInvite('rockpaperscissors', 'Rock, Paper, Scissors')}>
                         <CardHeader>
                             <CardTitle>Rock, Paper, Scissors</CardTitle>
                             <CardDescription>First to win 3 rounds is the winner!</CardDescription>
                         </CardHeader>
                     </Card>
-                    <Card className="cursor-pointer hover:bg-muted" onClick={() => setActiveGame('memorymatch')}>
+                    <Card className="cursor-pointer hover:bg-muted" onClick={() => handleSendGameInvite('memorymatch', 'Memory Match')}>
                         <CardHeader>
                             <CardTitle>Memory Match</CardTitle>
                             <CardDescription>Work together to find all the matching pairs.</CardDescription>
@@ -1543,6 +1640,7 @@ export default function ChatPage() {
                         </CardHeader>
                     </Card>
                 </div>
+                </>
            )}
         </main>
       </>
@@ -1571,10 +1669,49 @@ export default function ChatPage() {
             return (
                 <video controls src={message.mediaUrl} className="rounded-lg max-w-xs"></video>
             );
+         case 'game_invite':
+            if (!message.game) return null;
+            return (
+                 <div className="space-y-2">
+                    <p className="text-sm font-semibold">{message.senderId === currentUser?.id ? 'You sent an invite' : `${message.senderName} sent you an invite`} to play {message.game.name}!</p>
+                    {message.game.status === 'pending' && message.senderId !== currentUser?.id && (
+                        <div className="flex gap-2">
+                            <Button size="sm" onClick={() => handleGameInviteResponse(true)}>Accept</Button>
+                            <Button size="sm" variant="outline" onClick={() => handleGameInviteResponse(false)}>Decline</Button>
+                        </div>
+                    )}
+                     {message.game.status === 'accepted' && (
+                        <p className="text-xs text-green-500">Invite accepted. Let's play!</p>
+                    )}
+                     {message.game.status === 'declined' && (
+                        <p className="text-xs text-red-500">Invite declined.</p>
+                    )}
+                     {message.game.status === 'pending' && message.senderId === currentUser?.id && (
+                        <p className="text-xs text-muted-foreground">Waiting for response...</p>
+                    )}
+                </div>
+            );
         default:
             return <p className="text-sm text-red-500">Unsupported message type</p>
     }
   }
+
+  const renderGameInviteDialog = () => (
+    <AlertDialog open={!!gameInvite} onOpenChange={() => setGameInvite(null)}>
+        <AlertDialogContent>
+            <AlertDialogHeader>
+                <AlertDialogTitle>{gameInvite?.inviterName} has invited you to play a game!</AlertDialogTitle>
+                <AlertDialogDescription>
+                    Do you want to accept the invitation to play {gameInvite?.gameName}?
+                </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+                <AlertDialogCancel onClick={() => handleGameInviteResponse(false)}>Decline</AlertDialogCancel>
+                <AlertDialogAction onClick={() => handleGameInviteResponse(true)}>Accept</AlertDialogAction>
+            </AlertDialogFooter>
+        </AlertDialogContent>
+    </AlertDialog>
+  );
 
   return (
     <div className="flex min-h-screen bg-background">
@@ -1776,7 +1913,7 @@ export default function ChatPage() {
                                   <span className="text-xs text-muted-foreground px-3">{sender.name}</span>
                               )}
                               <div className="relative">
-                                <Card className={`rounded-2xl max-w-sm md:max-w-md ${isUser ? 'bg-primary text-primary-foreground' : 'bg-muted'} ${message.type === 'text' ? 'p-3' : 'p-1'}`}>
+                                <Card className={`rounded-2xl max-w-sm md:max-w-md ${isUser ? 'bg-primary text-primary-foreground' : 'bg-muted'} ${message.type.startsWith('game') ? 'p-3' : (message.type === 'text' ? 'p-3' : 'p-1')}`}>
                                     <CardContent className="p-0">
                                       {renderMessageContent(message)}
                                     </CardContent>
@@ -1902,6 +2039,7 @@ export default function ChatPage() {
       </SidebarInset>
       {renderCallModal()}
       {renderRegenDialog()}
+      {renderGameInviteDialog()}
       <audio ref={remoteAudioRef} autoPlay playsInline />
     </div>
   );

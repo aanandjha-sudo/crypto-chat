@@ -4,3 +4,4 @@ config();
 import '@/ai/flows/notification-triage.ts';
 import '@/ai/flows/user-codes.ts';
 import '@/ai/flows/user-login-code.ts';
+import '@/ai/flows/game-invite.ts';
