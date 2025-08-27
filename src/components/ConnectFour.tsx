@@ -63,7 +63,6 @@ export function ConnectFour({ conversationId, currentUser }: ConnectFourProps) {
                                 scores: { R: 0, Y: 0 }
                             };
                             await setDoc(gameDocRef, newGameState);
-                            setGameState(newGameState);
                         }
                     }
                 }

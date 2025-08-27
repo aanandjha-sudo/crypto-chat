@@ -78,7 +78,6 @@ export function Checkers({ conversationId, currentUser }: CheckersProps) {
                                 blackPieces: 12,
                             };
                             await setDoc(gameDocRef, newGameState);
-                            setGameState(newGameState);
                         }
                     }
                 }
@@ -254,7 +253,7 @@ export function Checkers({ conversationId, currentUser }: CheckersProps) {
                 </CardHeader>
                 <CardContent className="flex justify-center items-center p-6 space-y-4 flex-col">
                     <Skeleton className="h-8 w-40" />
-                    <Skeleton className="w-[320px] h-[320px] md:w-[400px] md:h-[400px]" />
+                    <Skeleton className="w-[320px] h-[320px] md:w-[384px] md:h-[384px]" />
                     <Skeleton className="h-8 w-60" />
                 </CardContent>
             </Card>

@@ -1525,7 +1525,7 @@ export default function ChatPage() {
                     <Card className="cursor-pointer hover:bg-muted" onClick={() => setActiveGame('rockpaperscissors')}>
                         <CardHeader>
                             <CardTitle>Rock, Paper, Scissors</CardTitle>
-                            <CardDescription>A classic game of choices. Best of five rounds wins.</CardDescription>
+                            <CardDescription>First to win 3 rounds is the winner!</CardDescription>
                         </CardHeader>
                     </Card>
                      <Card>
