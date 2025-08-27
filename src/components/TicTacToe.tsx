@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { UserData } from '@/app/chat/page';
 import { RefreshCw, X, Circle } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
+import { Skeleton } from './ui/skeleton';
 
 type PlayerSymbol = 'X' | 'O';
 type Board = (PlayerSymbol | null)[];
@@ -18,8 +19,8 @@ interface GameState {
     nextPlayer: PlayerSymbol;
     winner: PlayerSymbol | 'draw' | null;
     players: {
-        X: string | null;
-        O: string | null;
+        X: string;
+        O: string;
     };
     scores: {
         X: number;
@@ -42,19 +43,18 @@ export function TicTacToe({ conversationId, currentUser }: TicTacToeProps) {
             if (docSnap.exists()) {
                 setGameState(docSnap.data() as GameState);
             } else {
-                // If no game exists, create one
                 const conversationDoc = await getDoc(doc(db, 'conversations', conversationId));
                 if(conversationDoc.exists()) {
                     const members = conversationDoc.data().members as string[];
-                    // Ensure private chat with 2 members
                     if (members.length === 2) {
+                        const sortedMembers = [...members].sort();
                         const newGameState: GameState = {
                             board: Array(9).fill(null),
                             nextPlayer: 'X',
                             winner: null,
                             players: {
-                                X: members[0], // Player 1 is always X
-                                O: members[1]  // Player 2 is always O
+                                X: sortedMembers[0],
+                                O: sortedMembers[1]
                             },
                             scores: { X: 0, O: 0 }
                         };
@@ -69,9 +69,9 @@ export function TicTacToe({ conversationId, currentUser }: TicTacToeProps) {
     
     const calculateWinner = (board: Board): PlayerSymbol | null => {
         const lines = [
-            [0, 1, 2], [3, 4, 5], [6, 7, 8], // rows
-            [0, 3, 6], [1, 4, 7], [2, 5, 8], // columns
-            [0, 4, 8], [2, 4, 6]  // diagonals
+            [0, 1, 2], [3, 4, 5], [6, 7, 8],
+            [0, 3, 6], [1, 4, 7], [2, 5, 8],
+            [0, 4, 8], [2, 4, 6]
         ];
         for (let i = 0; i < lines.length; i++) {
             const [a, b, c] = lines[i];
@@ -87,7 +87,12 @@ export function TicTacToe({ conversationId, currentUser }: TicTacToeProps) {
             return;
         }
 
-        const mySymbol = Object.keys(gameState.players).find(key => gameState.players[key as PlayerSymbol] === currentUser.id) as PlayerSymbol | undefined;
+        const mySymbol = (Object.keys(gameState.players) as PlayerSymbol[]).find(key => gameState.players[key] === currentUser.id);
+
+        if (!mySymbol) {
+            toast({ variant: 'destructive', title: "Spectator Mode", description: "You can't make a move in this game."});
+            return;
+        }
 
         if (gameState.nextPlayer !== mySymbol) {
             toast({ variant: 'destructive', title: "Not your turn!", description: "Wait for the other player to move."});
@@ -120,9 +125,8 @@ export function TicTacToe({ conversationId, currentUser }: TicTacToeProps) {
         
          const newGameState: Partial<GameState> = {
             board: Array(9).fill(null),
-            nextPlayer: 'X', // X always starts
+            nextPlayer: 'X',
             winner: null,
-            // Keep players and scores
          };
          await updateDoc(gameDocRef, newGameState);
     };
@@ -131,54 +135,56 @@ export function TicTacToe({ conversationId, currentUser }: TicTacToeProps) {
         if (!gameState) return "Loading game...";
         
         const { winner, nextPlayer, players } = gameState;
+        const mySymbol = (Object.keys(players) as PlayerSymbol[]).find(key => players[key] === currentUser.id);
         
         if (winner) {
             if (winner === 'draw') return "It's a draw!";
-            const winnerName = players[winner] === currentUser.id ? "You" : "Opponent";
+            if (!mySymbol) return `Player ${winner} won!`;
+            const winnerName = winner === mySymbol ? "You" : "Opponent";
             return `${winnerName} won!`;
         }
 
-        const nextPlayerIsMe = players[nextPlayer] === currentUser.id;
-        return nextPlayerIsMe ? "Your turn" : "Opponent's turn";
+        if (!mySymbol) return `Spectating... It's Player ${nextPlayer}'s turn.`;
+
+        return players[nextPlayer] === currentUser.id ? "Your turn" : "Opponent's turn";
     };
 
     if (!gameState) {
         return (
              <Card>
                 <CardHeader>
-                    <CardTitle>Loading Game...</CardTitle>
+                    <CardTitle>Tic-Tac-Toe</CardTitle>
+                    <CardDescription>Loading Game...</CardDescription>
                 </CardHeader>
-                <CardContent>
-                    <div className="flex justify-center items-center p-6">
-                        <RefreshCw className="h-8 w-8 animate-spin" />
-                    </div>
+                <CardContent className="flex justify-center items-center p-6 flex-col space-y-4">
+                     <Skeleton className="h-8 w-40" />
+                     <div className="grid grid-cols-3 gap-2">
+                        {Array.from({length: 9}).map((_, i) => (
+                           <Skeleton key={i} className="w-20 h-20 md:w-24 md:h-24" />
+                        ))}
+                     </div>
+                     <Skeleton className="h-8 w-60" />
                 </CardContent>
             </Card>
         )
     }
     
-    const mySymbol = Object.keys(gameState.players).find(key => gameState.players[key as PlayerSymbol] === currentUser.id) as PlayerSymbol | undefined;
+    const mySymbol = (Object.keys(gameState.players) as PlayerSymbol[]).find(key => gameState.players[key] === currentUser.id);
     const opponentSymbol = mySymbol === 'X' ? 'O' : 'X';
-
-    if(!mySymbol) {
-        return (
-            <Card>
-                <CardHeader>
-                    <CardTitle>Error</CardTitle>
-                    <CardDescription>Could not join game. You may not be a member of this conversation.</CardDescription>
-                </CardHeader>
-            </Card>
-        )
-    }
+    const amIPlayer = !!mySymbol;
 
     return (
         <Card>
             <CardHeader>
                 <CardTitle>Tic-Tac-Toe</CardTitle>
-                <CardDescription>You are playing as '{mySymbol}'. First to get 3 in a row wins.</CardDescription>
+                 {amIPlayer ? (
+                    <CardDescription>You are playing as '{mySymbol}'. First to get 3 in a row wins.</CardDescription>
+                 ) : (
+                    <CardDescription>You are spectating this game.</CardDescription>
+                 )}
             </CardHeader>
             <CardContent className="flex flex-col items-center gap-4">
-                 <div className="text-lg font-semibold p-2 bg-muted rounded-md">{getStatusMessage()}</div>
+                 <div className="text-lg font-semibold p-2 bg-muted rounded-md min-w-[200px] text-center">{getStatusMessage()}</div>
                  <div className="grid grid-cols-3 gap-2">
                     {gameState.board.map((cell, index) => (
                         <Button
@@ -186,7 +192,7 @@ export function TicTacToe({ conversationId, currentUser }: TicTacToeProps) {
                             onClick={() => handleCellClick(index)}
                             variant="outline"
                             className="w-20 h-20 md:w-24 md:h-24 flex items-center justify-center text-4xl font-bold"
-                            disabled={!!cell || !!gameState.winner}
+                            disabled={!!cell || !!gameState.winner || !amIPlayer}
                         >
                             {cell === 'X' && <X className="w-12 h-12" />}
                             {cell === 'O' && <Circle className="w-12 h-12" />}
@@ -195,11 +201,11 @@ export function TicTacToe({ conversationId, currentUser }: TicTacToeProps) {
                 </div>
                  <div className="flex items-center gap-4 text-lg">
                     <span>Scores:</span>
-                    <span>You ({gameState.scores[mySymbol] || 0})</span>
+                    <span>You ({amIPlayer ? gameState.scores[mySymbol] : 0})</span>
                     <span>-</span>
-                    <span>Opponent ({gameState.scores[opponentSymbol] || 0})</span>
+                    <span>Opponent ({amIPlayer ? gameState.scores[opponentSymbol] : 0})</span>
                 </div>
-                {gameState.winner && (
+                {gameState.winner && amIPlayer && (
                      <Button onClick={handleResetGame}>
                         <RefreshCw className="mr-2 h-4 w-4"/>
                         Play Again
@@ -209,4 +215,3 @@ export function TicTacToe({ conversationId, currentUser }: TicTacToeProps) {
         </Card>
     );
 }
-
