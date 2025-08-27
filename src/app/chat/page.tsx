@@ -77,7 +77,7 @@ interface Conversation {
     type: 'private' | 'group';
     name: string;
     avatar: string;
-    members?: string[];
+    members: string[];
     call?: CallState;
 }
 
@@ -658,7 +658,7 @@ export default function ChatPage() {
     }
 
     try {
-        const recipients = selectedConversation.members?.filter(id => id !== currentUser.id) || [];
+        const recipients = selectedConversation.members.filter(id => id !== currentUser.id) || [];
         for (const recipientId of recipients) {
             const userDoc = await getDoc(doc(db, 'users', recipientId));
             if(userDoc.exists() && userDoc.data().fcmToken) {
@@ -716,7 +716,7 @@ export default function ChatPage() {
                         });
                         setUploadProgress(null);
                         
-                         const recipients = selectedConversation.members?.filter(id => id !== currentUser.id) || [];
+                         const recipients = selectedConversation.members.filter(id => id !== currentUser.id) || [];
                          for (const recipientId of recipients) {
                              const userDoc = await getDoc(doc(db, 'users', recipientId));
                              if(userDoc.exists() && userDoc.data().fcmToken) {
@@ -796,7 +796,7 @@ export default function ChatPage() {
 
             setUploadProgress(null);
 
-            const recipients = selectedConversation.members?.filter(id => id !== currentUser.id) || [];
+            const recipients = selectedConversation.members.filter(id => id !== currentUser.id) || [];
             for (const recipientId of recipients) {
                 const userDoc = await getDoc(doc(db, 'users', recipientId));
                 if (userDoc.exists() && userDoc.data().fcmToken) {
@@ -1914,7 +1914,7 @@ export default function ChatPage() {
                     <div className="flex flex-col">
                       <span className="font-semibold">{selectedConversation.name}</span>
                       {selectedConversation.type === 'group' ? (
-                          <span className="text-xs text-muted-foreground">{selectedConversation.members?.length} members</span>
+                          <span className="text-xs text-muted-foreground">{selectedConversation.members.length} members</span>
                       ): (
                           getStatusDisplay()
                       )}
@@ -2040,7 +2040,7 @@ export default function ChatPage() {
                           <div className="flex-1">
                               <p className="font-semibold">{conv.name}</p>
                               <p className="text-sm text-muted-foreground truncate">
-                                  {conv.type === 'group' ? `${conv.members?.length} members` : 'Private Chat'}
+                                  {conv.type === 'group' ? `${conv.members.length} members` : 'Private Chat'}
                               </p>
                           </div>
                       </div>
