@@ -2,6 +2,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import dynamic from 'next/dynamic';
 import { Sidebar, SidebarInset, SidebarHeader, SidebarTrigger, SidebarContent, SidebarMenu, SidebarMenuItem, SidebarMenuButton, SidebarFooter, useSidebar, SidebarProvider } from '@/components/ui/sidebar';
 import { SheetTitle } from '@/components/ui/sheet';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -39,13 +40,22 @@ import { ContactList } from '@/components/ContactList';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Progress } from '@/components/ui/progress';
 import { formatDistanceToNow } from 'date-fns';
-import { TicTacToe } from '@/components/TicTacToe';
-import { ConnectFour } from '@/components/ConnectFour';
-import { RockPaperScissors } from '@/components/RockPaperScissors';
-import { MemoryMatch } from '@/components/MemoryMatch';
 import { useTheme } from '@/components/ThemeProvider';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { generateSimpleContactCode, generateSimpleLoginCode } from '@/lib/code-generator';
+
+const TicTacToe = dynamic(() => import('@/components/TicTacToe').then(mod => mod.TicTacToe), {
+  loading: () => <Skeleton className="w-full h-96" />,
+});
+const ConnectFour = dynamic(() => import('@/components/ConnectFour').then(mod => mod.ConnectFour), {
+  loading: () => <Skeleton className="w-full h-96" />,
+});
+const RockPaperScissors = dynamic(() => import('@/components/RockPaperScissors').then(mod => mod.RockPaperScissors), {
+  loading: () => <Skeleton className="w-full h-96" />,
+});
+const MemoryMatch = dynamic(() => import('@/components/MemoryMatch').then(mod => mod.MemoryMatch), {
+  loading: () => <Skeleton className="w-full h-96" />,
+});
 
 
 interface Message {
@@ -2076,3 +2086,5 @@ export default function Home() {
         </SidebarProvider>
     );
 }
+
+    
