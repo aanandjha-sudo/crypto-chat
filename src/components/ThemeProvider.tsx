@@ -29,14 +29,12 @@ export function ThemeProvider({
   storageKey = "vite-ui-theme",
   ...props
 }: ThemeProviderProps) {
-  const [theme, setTheme] = useState<Theme>(defaultTheme)
-
-  useEffect(() => {
-    const storedTheme = localStorage.getItem(storageKey) as Theme | null;
-    if (storedTheme) {
-      setTheme(storedTheme)
+  const [theme, setTheme] = useState<Theme>(() => {
+    if (typeof window === 'undefined') {
+      return defaultTheme;
     }
-  }, [storageKey]);
+    return (localStorage.getItem(storageKey) as Theme) || defaultTheme
+  })
 
   useEffect(() => {
     const root = window.document.documentElement
@@ -59,14 +57,19 @@ export function ThemeProvider({
         .matches ? "dark" : "light"
     }
     
+    // For custom themes, we need to apply the base dark/light class as well
+    // for components that rely on the base .dark selector.
     if (effectiveTheme.startsWith("theme-")) {
         root.classList.add(effectiveTheme)
-        // Also add dark/light class for base styles
-        if(window.matchMedia("(prefers-color-scheme: dark)").matches) {
-            root.classList.add("dark")
-        } else {
-             root.classList.add("light")
+        const isDark = window.matchMedia("(prefers-color-scheme: dark)").matches
+        const selectedThemeHasDarkVariant = ['love', 'retro', 'ocean', 'forest', 'sunshine', 'mono'].includes(effectiveTheme.replace('theme-',''));
+        
+        if (isDark && selectedThemeHasDarkVariant) {
+            root.classList.add("dark");
+        } else if (effectiveTheme !== 'theme-synthwave') {
+            root.classList.add("light");
         }
+
     } else {
         root.classList.add(effectiveTheme)
     }
@@ -75,9 +78,9 @@ export function ThemeProvider({
 
   const value = {
     theme,
-    setTheme: (theme: Theme) => {
-      localStorage.setItem(storageKey, theme)
-      setTheme(theme)
+    setTheme: (newTheme: Theme) => {
+      localStorage.setItem(storageKey, newTheme)
+      setTheme(newTheme)
     },
   }
 
