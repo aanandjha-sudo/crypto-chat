@@ -433,7 +433,7 @@ export default function ChatPage() {
     const unsubscribe = onSnapshot(q, (querySnapshot) => {
       const msgs: Message[] = [];
       querySnapshot.forEach((doc) => {
-        const msgData = doc.data() as Omit<Message, 'id'>;
+        const { id: _, ...msgData } = doc.data() as Message; // Exclude id if it exists
         if(currentUser && msgData.type === 'game_invite' && msgData.senderId !== currentUser.id && msgData.game?.status === 'pending' && !activeGame) {
              setGameInvite({
                 messageId: doc.id,
@@ -442,7 +442,7 @@ export default function ChatPage() {
                 gameId: msgData.game.id,
             });
         }
-        msgs.push({ id: doc.id, ...msgData });
+        msgs.push({ id: doc.id, ...(msgData as Omit<Message, 'id'>) });
       });
       setMessages(msgs);
     }, (error) => {
