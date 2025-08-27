@@ -193,8 +193,11 @@ export function Checkers({ conversationId, currentUser }: CheckersProps) {
         }
 
         let winner: GameState['winner'] = null;
-        if (redPieces === 0) winner = 'B';
-        if (blackPieces === 0) winner = 'R';
+        if (redPieces === 0) {
+            winner = 'B';
+        } else if (blackPieces === 0) {
+            winner = 'R';
+        }
         
         let newScores = {...gameState.scores};
         if(winner && winner !== 'draw') {
