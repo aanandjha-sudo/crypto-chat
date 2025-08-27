@@ -860,37 +860,47 @@ function ChatPage() {
   }
   
   const handleEditProfile = async () => {
-      if (!editProfileName.trim() || !currentUser) {
-          toast({ variant: 'destructive', title: 'Invalid Name', description: 'Profile name cannot be empty.' });
-          return;
-      }
-
-      try {
-          let newAvatarUrl = currentUser.avatar;
-          if (avatarFile) {
-              const fileRef = storageRef(storage, `avatars/${currentUser.id}/${avatarFile.name}`);
-              const snapshot = await uploadBytesResumable(fileRef, avatarFile);
-              newAvatarUrl = await getDownloadURL(snapshot.ref);
-          }
-
-          const userDocRef = doc(db, 'users', currentUser.id);
-          const updates: Partial<UserData> = {
-              name: editProfileName,
-              avatar: newAvatarUrl,
-          };
-          await updateDoc(userDocRef, updates);
-          const updatedUser = { ...currentUser, ...updates };
-          setCurrentUser(updatedUser);
-          
-          toast({ title: 'Profile Updated', description: 'Your profile has been successfully updated.' });
-          setAvatarFile(null);
-          setEditProfileOpen(false);
-      } catch (error) {
-          console.error('Error updating profile:', error);
-          toast({ variant: 'destructive', title: 'Update Failed', description: 'Could not update your profile.' });
-      }
+    if (!editProfileName.trim() || !currentUser) {
+        toast({ variant: 'destructive', title: 'Invalid Name', description: 'Profile name cannot be empty.' });
+        return;
+    }
+  
+    try {
+        let newAvatarUrl = currentUser.avatar;
+        if (avatarFile) {
+            const fileRef = storageRef(storage, `avatars/${currentUser.id}/${avatarFile.name}`);
+            const snapshot = await uploadBytesResumable(fileRef, avatarFile);
+            newAvatarUrl = await getDownloadURL(snapshot.ref);
+        }
+  
+        const userDocRef = doc(db, 'users', currentUser.id);
+        const updates: Partial<UserData> = {
+            name: editProfileName,
+            avatar: newAvatarUrl,
+        };
+        await updateDoc(userDocRef, updates);
+        
+        // Optimistically update the current user state
+        const updatedUser = { ...currentUser, name: editProfileName, avatar: newAvatarUrl };
+        setCurrentUser(updatedUser);
+        
+        toast({ title: 'Profile Updated', description: 'Your profile has been successfully updated.' });
+        setAvatarFile(null); // Clear the file state
+        setEditProfileOpen(false);
+    } catch (error) {
+        console.error('Error updating profile:', error);
+        toast({ variant: 'destructive', title: 'Update Failed', description: 'Could not update your profile.' });
+    }
   }
 
+  const handleAvatarFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+        setAvatarFile(file);
+        // Create a local URL to show a preview of the new avatar
+        setEditProfileAvatar(URL.createObjectURL(file));
+    }
+  }
 
   const handleAddContact = async () => {
     if (!addContactCode.trim() || !currentUser) return;
@@ -933,10 +943,8 @@ function ChatPage() {
       
       const batch = writeBatch(db);
       
-      // 1. Update the current user's contact list
       batch.update(userDocRef, { contacts: updatedContacts });
 
-      // 2. Create the new private conversation
       batch.set(convDocRef, {
           type: 'private',
           members: [currentUser.id, newContactId],
@@ -1423,7 +1431,7 @@ function ChatPage() {
                                     <Label className="text-right">Avatar</Label>
                                     <div className="col-span-3 flex items-center gap-2">
                                         <Avatar>
-                                            <AvatarImage src={avatarFile ? URL.createObjectURL(avatarFile) : editProfileAvatar} />
+                                            <AvatarImage src={editProfileAvatar} />
                                             <AvatarFallback>{editProfileName.charAt(0) || '?'}</AvatarFallback>
                                         </Avatar>
                                         <Button variant="outline" size="sm" onClick={() => avatarInputRef.current?.click()}>
@@ -1435,7 +1443,7 @@ function ChatPage() {
                                             accept="image/*"
                                             className="hidden" 
                                             ref={avatarInputRef} 
-                                            onChange={(e) => setAvatarFile(e.target.files?.[0] || null)}
+                                            onChange={handleAvatarFileChange}
                                         />
                                     </div>
                                 </div>
