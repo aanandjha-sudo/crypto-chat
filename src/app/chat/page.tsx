@@ -78,7 +78,7 @@ interface Conversation {
     name: string;
     avatar: string;
     members: string[];
-    call?: CallState;
+    call: CallState;
 }
 
 export interface UserData {
@@ -353,7 +353,7 @@ export default function ChatPage() {
                     name: convData.name,
                     avatar: convData.avatar || `https://picsum.photos/seed/${conversationId}/100/100`,
                     members: convData.members,
-                    call: convData.call
+                    call: convData.call || { active: false, status: 'ended', initiator: '' }
                 };
             } else { // 'private'
                 const otherUserId = convData.members.find((id: string) => id !== user.id);
@@ -365,7 +365,7 @@ export default function ChatPage() {
                         name: contact?.name || 'Unknown User',
                         avatar: contact?.avatar || `https://picsum.photos/seed/${otherUserId}/100/100`,
                         members: convData.members,
-                        call: convData.call,
+                        call: convData.call || { active: false, status: 'ended', initiator: '' }
                     };
                 }
             }
@@ -516,13 +516,13 @@ export default function ChatPage() {
       const callState = convData.call as CallState | undefined;
   
       setConversations(prevConvs => prevConvs.map(c => 
-        c.id === snapshot.id ? {...c, call: callState} : c
+        c.id === snapshot.id ? {...c, call: callState || { active: false, status: 'ended', initiator: '' }} : c
       ));
 
       setSelectedConversation(prev => {
         if (!prev || prev.id !== snapshot.id) return prev;
         const needsUpdate = JSON.stringify(prev.call) !== JSON.stringify(callState);
-        return needsUpdate ? { ...prev, call: callState } : prev;
+        return needsUpdate ? { ...prev, call: callState || { active: false, status: 'ended', initiator: '' } } : prev;
       });
 
       const isPartOfCall = callState?.active && convData.members?.includes(currentUser.id);
@@ -600,7 +600,7 @@ export default function ChatPage() {
         setCurrentUser(prev => prev ? {...prev, loginCode: newCode} : null);
         toast({
           title: 'Private Code Regenerated',
-          description: `Your new private login code is: ${newCode}`,
+          description: `Your new private code is: ${newCode}`,
         });
       } catch (error) {
         console.error("Error regenerating login code:", error);
@@ -2076,3 +2076,5 @@ export default function ChatPage() {
   );
 }
 
+
+    
