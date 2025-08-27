@@ -41,6 +41,7 @@ import { formatDistanceToNow } from 'date-fns';
 import { TicTacToe } from '@/components/TicTacToe';
 import { ConnectFour } from '@/components/ConnectFour';
 import { Checkers } from '@/components/Checkers';
+import { RockPaperScissors } from '@/components/RockPaperScissors';
 
 
 interface Message {
@@ -92,7 +93,7 @@ type CallState = {
 }
 
 type ActiveView = 'chats' | 'contacts' | 'profile' | 'games';
-type ActiveGame = 'tictactoe' | 'connectfour' | 'checkers' | null;
+type ActiveGame = 'tictactoe' | 'connectfour' | 'checkers' | 'rockpaperscissors' | null;
 
 function ChatSkeleton() {
     return (
@@ -1472,6 +1473,7 @@ export default function ChatPage() {
     tictactoe: TicTacToe,
     connectfour: ConnectFour,
     checkers: Checkers,
+    rockpaperscissors: RockPaperScissors,
   };
 
   const renderGamesView = () => {
@@ -1518,6 +1520,12 @@ export default function ChatPage() {
                         <CardHeader>
                             <CardTitle>Checkers</CardTitle>
                             <CardDescription>The classic game of strategy. Capture all your opponent's pieces to win.</CardDescription>
+                        </CardHeader>
+                    </Card>
+                    <Card className="cursor-pointer hover:bg-muted" onClick={() => setActiveGame('rockpaperscissors')}>
+                        <CardHeader>
+                            <CardTitle>Rock, Paper, Scissors</CardTitle>
+                            <CardDescription>A classic game of choices. Best of five rounds wins.</CardDescription>
                         </CardHeader>
                     </Card>
                      <Card>
