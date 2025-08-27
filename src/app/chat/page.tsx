@@ -40,6 +40,7 @@ import { Progress } from '@/components/ui/progress';
 import { formatDistanceToNow } from 'date-fns';
 import { TicTacToe } from '@/components/TicTacToe';
 import { ConnectFour } from '@/components/ConnectFour';
+import { Checkers } from '@/components/Checkers';
 
 
 interface Message {
@@ -91,7 +92,7 @@ type CallState = {
 }
 
 type ActiveView = 'chats' | 'contacts' | 'profile' | 'games';
-type ActiveGame = 'tictactoe' | 'connectfour' | null;
+type ActiveGame = 'tictactoe' | 'connectfour' | 'checkers' | null;
 
 function ChatSkeleton() {
     return (
@@ -1470,6 +1471,7 @@ export default function ChatPage() {
   const gameComponents: Record<NonNullable<ActiveGame>, React.ComponentType<any>> = {
     tictactoe: TicTacToe,
     connectfour: ConnectFour,
+    checkers: Checkers,
   };
 
   const renderGamesView = () => {
@@ -1489,11 +1491,11 @@ export default function ChatPage() {
           </div>
         </header>
         <main className="flex-1 p-4 md:p-6">
-           {!selectedConversation || !currentUser ? (
+           {!selectedConversation || selectedConversation.type !== 'private' ? (
                 <Card>
                     <CardHeader>
                         <CardTitle>Select a Conversation</CardTitle>
-                        <CardDescription>Please select a private chat from the sidebar to start a game with a contact.</CardDescription>
+                        <CardDescription>Please select a private one-on-one chat from the sidebar to start a game with a contact.</CardDescription>
                     </CardHeader>
                 </Card>
            ) : GameComponent ? (
@@ -1510,6 +1512,12 @@ export default function ChatPage() {
                         <CardHeader>
                             <CardTitle>Connect Four</CardTitle>
                             <CardDescription>Drop your discs and be the first to get four in a row to win.</CardDescription>
+                        </CardHeader>
+                    </Card>
+                    <Card className="cursor-pointer hover:bg-muted" onClick={() => setActiveGame('checkers')}>
+                        <CardHeader>
+                            <CardTitle>Checkers</CardTitle>
+                            <CardDescription>The classic game of strategy. Capture all your opponent's pieces to win.</CardDescription>
                         </CardHeader>
                     </Card>
                      <Card>
