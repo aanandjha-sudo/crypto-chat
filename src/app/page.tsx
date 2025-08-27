@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
@@ -44,6 +45,7 @@ import { RockPaperScissors } from '@/components/RockPaperScissors';
 import { MemoryMatch } from '@/components/MemoryMatch';
 import { useTheme } from '@/components/ThemeProvider';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { generateSimpleContactCode, generateSimpleLoginCode } from '@/lib/code-generator';
 
 
 interface Message {
@@ -239,24 +241,22 @@ function ChatPage() {
     }
   }, []);
   
-  const generateUniqueCode = useCallback(async (type: 'contact' | 'login') => {
+  const generateUniqueCode = useCallback(async (generator: () => string, field: 'contactCode' | 'loginCode') => {
     let isUnique = false;
     let newCode = '';
     let attempts = 0;
     const maxAttempts = 10;
     while (!isUnique && attempts < maxAttempts) {
       attempts++;
-      const { code } = type === 'contact' ? await generateContactCode() : await generateLoginCode();
-      const field = type === 'contact' ? "contactCode" : "loginCode";
-      const q = query(collection(db, "users"), where(field, "==", code));
+      newCode = generator();
+      const q = query(collection(db, "users"), where(field, "==", newCode));
       const querySnapshot = await getDocs(q);
       if (querySnapshot.empty) {
         isUnique = true;
-        newCode = code;
       }
     }
     if (!isUnique) {
-      throw new Error(`Failed to generate a unique ${type} code after several attempts.`);
+      throw new Error(`Failed to generate a unique ${field} after several attempts.`);
     }
     return newCode;
   }, []);
@@ -277,8 +277,8 @@ function ChatPage() {
     } else {
         try {
             const [newContactCode, newLoginCode] = await Promise.all([
-                generateUniqueCode('contact'),
-                generateUniqueCode('login')
+                generateUniqueCode(generateSimpleContactCode, 'contactCode'),
+                generateUniqueCode(generateSimpleLoginCode, 'loginCode')
             ]);
             
             const newUser: UserData = {
@@ -417,7 +417,9 @@ function ChatPage() {
 
 
   useEffect(() => {
-    if (!selectedConversation || activeView !== 'chats') {
+    if (!selectedConversation) return;
+
+    if (activeView !== 'chats') {
         setMessages([]);
         return;
     };
@@ -431,7 +433,7 @@ function ChatPage() {
     const unsubscribe = onSnapshot(q, (querySnapshot) => {
       const msgs: Message[] = [];
       querySnapshot.forEach((doc) => {
-        const { id: _, ...msgData } = doc.data(); 
+        const msgData = doc.data(); 
         if(currentUser && msgData.type === 'game_invite' && msgData.senderId !== currentUser.id && msgData.game?.status === 'pending' && !activeGame) {
              setGameInvite({
                 messageId: doc.id,
@@ -592,7 +594,7 @@ function ChatPage() {
   const performCodeRegeneration = useCallback(async () => {
       if (!currentUser) return;
        try {
-        const newCode = await generateUniqueCode('login');
+        const { code: newCode } = await generateLoginCode();
         const userDocRef = doc(db, 'users', currentUser.id);
         await updateDoc(userDocRef, { loginCode: newCode });
         setCurrentUser(prev => prev ? {...prev, loginCode: newCode} : null);
@@ -610,7 +612,7 @@ function ChatPage() {
       } finally {
         setRegenerateConfirmOpen(false);
       }
-  }, [currentUser, toast, generateUniqueCode]);
+  }, [currentUser, toast]);
 
   // Regeneration Timer effect
   useEffect(() => {
@@ -838,7 +840,7 @@ function ChatPage() {
   const handleGenerateContactCode = async () => {
     if (!currentUser) return;
     try {
-      const newCode = await generateUniqueCode('contact');
+      const { code: newCode } = await generateContactCode();
       const userDocRef = doc(db, 'users', currentUser.id);
       await updateDoc(userDocRef, { contactCode: newCode });
       setCurrentUser(prev => prev ? {...prev, contactCode: newCode} : null);
