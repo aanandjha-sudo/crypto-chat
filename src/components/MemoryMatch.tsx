@@ -82,7 +82,7 @@ export function MemoryMatch({ conversationId, currentUser }: MemoryMatchProps) {
         if (!gameState || isChecking || gameState.winner) return;
 
         if (gameState.currentPlayer !== currentUser.id) {
-            toast({ title: "Not your turn!", description: "Wait for the other player to move." });
+            toast({ variant: 'destructive', title: "Not your turn!", description: "Wait for the other player to move." });
             return;
         }
 
@@ -227,20 +227,3 @@ export function MemoryMatch({ conversationId, currentUser }: MemoryMatchProps) {
         </Card>
     );
 }
-
-// Add these styles to your globals.css to enable 3D transform for the card flip effect
-/*
-.perspective-\[1000px\] {
-    perspective: 1000px;
-}
-.transform-style-3d {
-    transform-style: preserve-3d;
-}
-.backface-hidden {
-    backface-visibility: hidden;
-    -webkit-backface-visibility: hidden;
-}
-.rotate-y-180 {
-    transform: rotateY(180deg);
-}
-*/

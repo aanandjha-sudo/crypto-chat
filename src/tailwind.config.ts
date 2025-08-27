@@ -1,3 +1,4 @@
+
 import type {Config} from 'tailwindcss';
 
 const plugin = require('tailwindcss/plugin')
@@ -98,22 +99,5 @@ export default {
   },
   plugins: [
     require('tailwindcss-animate'),
-    plugin(function({ addUtilities }) {
-      addUtilities({
-        '.transform-style-3d': {
-          'transform-style': 'preserve-3d',
-        },
-        '.perspective-\[1000px\]': {
-          'perspective': '1000px',
-        },
-        '.backface-hidden': {
-          'backface-visibility': 'hidden',
-          '-webkit-backface-visibility': 'hidden',
-        },
-        '.rotate-y-180': {
-          'transform': 'rotateY(180deg)',
-        },
-      })
-    })
   ],
 } satisfies Config;
