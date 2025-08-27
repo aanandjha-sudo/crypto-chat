@@ -250,14 +250,15 @@ function ChatPage() {
     }
   }, []);
   
-  const generateUniqueCode = useCallback(async (generator: () => string, field: 'contactCode' | 'loginCode') => {
+  const generateUniqueCode = useCallback(async (generator: () => Promise<{ code: string }>, field: 'contactCode' | 'loginCode') => {
     let isUnique = false;
     let newCode = '';
     let attempts = 0;
     const maxAttempts = 10;
     while (!isUnique && attempts < maxAttempts) {
       attempts++;
-      newCode = generator();
+      const { code } = await generator();
+      newCode = code;
       const q = query(collection(db, "users"), where(field, "==", newCode));
       const querySnapshot = await getDocs(q);
       if (querySnapshot.empty) {
@@ -285,10 +286,8 @@ function ChatPage() {
         user = { id: docSnap.id, ...docSnap.data() } as UserData;
     } else {
         try {
-            const [newContactCode, newLoginCode] = await Promise.all([
-                generateUniqueCode(generateSimpleContactCode, 'contactCode'),
-                generateUniqueCode(generateSimpleLoginCode, 'loginCode')
-            ]);
+            const newContactCode = generateSimpleContactCode();
+            const newLoginCode = generateSimpleLoginCode();
             
             const newUser: UserData = {
                 id: userId,
@@ -320,7 +319,7 @@ function ChatPage() {
     setEditProfileName(user.name);
     setEditProfileAvatar(user.avatar);
     setLoading(false);
-  }, [toast, generateUniqueCode]);
+  }, [toast]);
 
 
   useEffect(() => {
