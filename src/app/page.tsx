@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
@@ -77,8 +78,6 @@ export interface Contact {
   id: string;
   name: string;
   avatar: string;
-  status?: 'online' | 'offline';
-  lastSeen?: Timestamp;
 }
 
 interface Conversation {
@@ -221,7 +220,7 @@ function ChatPage() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordingChunksRef = useRef<Blob[]>([]);
   
-  const [otherUserStatus, setOtherUserStatus] = useState<Contact['status']>('offline');
+  const [otherUserStatus, setOtherUserStatus] = useState<UserData['status']>('offline');
   const [otherUserLastSeen, setOtherUserLastSeen] = useState<Timestamp | null>(null);
 
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
@@ -248,27 +247,6 @@ function ChatPage() {
     if (typeof window !== 'undefined' && 'Notification' in window) {
       setNotificationPermission(Notification.permission);
     }
-  }, []);
-  
-  const generateUniqueCode = useCallback(async (generator: () => Promise<{ code: string }>, field: 'contactCode' | 'loginCode') => {
-    let isUnique = false;
-    let newCode = '';
-    let attempts = 0;
-    const maxAttempts = 10;
-    while (!isUnique && attempts < maxAttempts) {
-      attempts++;
-      const { code } = await generator();
-      newCode = code;
-      const q = query(collection(db, "users"), where(field, "==", newCode));
-      const querySnapshot = await getDocs(q);
-      if (querySnapshot.empty) {
-        isUnique = true;
-      }
-    }
-    if (!isUnique) {
-      throw new Error(`Failed to generate a unique ${field} after several attempts.`);
-    }
-    return newCode;
   }, []);
   
   const initializeUser = useCallback(async (firebaseUser: FirebaseUser) => {
@@ -918,7 +896,7 @@ function ChatPage() {
     if (!addContactCode.trim() || !currentUser) return;
     
     try {
-      const q = query(collection(db, "users"), where("contactCode", "==", addContactCode));
+      const q = query(collection(db, "users"), where("contactCode", "==", addContactCode.trim()));
       const querySnapshot = await getDocs(q);
 
       if (querySnapshot.empty) {
@@ -950,15 +928,15 @@ function ChatPage() {
       const userDocRef = doc(db, 'users', currentUser.id);
       const updatedContacts = [...(currentUser.contacts || []), newContact];
       
-      const newContactUserDocRef = doc(db, 'users', newContactId);
-      const updatedNewContactContacts = [...(newContactData.contacts || []), { id: currentUser.id, name: currentUser.name, avatar: currentUser.avatar }];
-
       const conversationId = [currentUser.id, newContactId].sort().join('_');
       const convDocRef = doc(db, 'conversations', conversationId);
       
       const batch = writeBatch(db);
+      
+      // 1. Update the current user's contact list
       batch.update(userDocRef, { contacts: updatedContacts });
-      batch.update(newContactUserDocRef, { contacts: updatedNewContactContacts });
+
+      // 2. Create the new private conversation
       batch.set(convDocRef, {
           type: 'private',
           members: [currentUser.id, newContactId],
@@ -2083,3 +2061,5 @@ export default function Home() {
         </SidebarProvider>
     );
 }
+
+    
