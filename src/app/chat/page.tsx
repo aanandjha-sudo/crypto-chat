@@ -1,8 +1,7 @@
-
 "use client";
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { Sidebar, SidebarInset, SidebarHeader, SidebarTrigger, SidebarContent, SidebarMenu, SidebarMenuItem, SidebarMenuButton, SidebarFooter, useSidebar } from '@/components/ui/sidebar';
+import { Sidebar, SidebarInset, SidebarHeader, SidebarTrigger, SidebarContent, SidebarMenu, SidebarMenuItem, SidebarMenuButton, SidebarFooter, useSidebar, SidebarProvider } from '@/components/ui/sidebar';
 import { SheetTitle } from '@/components/ui/sheet';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Card, CardHeader, CardContent, CardTitle, CardDescription } from '@/components/ui/card';
@@ -165,7 +164,7 @@ function ChatSkeleton() {
 }
 
 
-export default function ChatPage() {
+function ChatPage() {
   const { isMobile, setOpenMobile } = useSidebar();
   const [currentUser, setCurrentUser] = useState<UserData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -2066,4 +2065,12 @@ export default function ChatPage() {
       <audio ref={remoteAudioRef} autoPlay playsInline />
     </div>
   );
+}
+
+export default function Home() {
+    return (
+        <SidebarProvider>
+            <ChatPage />
+        </SidebarProvider>
+    );
 }
