@@ -1,6 +1,8 @@
+
 "use client";
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import dynamic from 'next/dynamic';
 import { Sidebar, SidebarInset, SidebarHeader, SidebarTrigger, SidebarContent, SidebarMenu, SidebarMenuItem, SidebarMenuButton, SidebarFooter, useSidebar, SidebarProvider } from '@/components/ui/sidebar';
 import { SheetTitle } from '@/components/ui/sheet';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -38,12 +40,22 @@ import { ContactList } from '@/components/ContactList';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Progress } from '@/components/ui/progress';
 import { formatDistanceToNow } from 'date-fns';
-import { TicTacToe } from '@/components/TicTacToe';
-import { ConnectFour } from '@/components/ConnectFour';
-import { RockPaperScissors } from '@/components/RockPaperScissors';
-import { MemoryMatch } from '@/components/MemoryMatch';
 import { useTheme } from '@/components/ThemeProvider';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { generateSimpleContactCode, generateSimpleLoginCode } from '@/lib/code-generator';
+
+const TicTacToe = dynamic(() => import('@/components/TicTacToe').then(mod => mod.TicTacToe), {
+  loading: () => <Skeleton className="w-full h-96" />,
+});
+const ConnectFour = dynamic(() => import('@/components/ConnectFour').then(mod => mod.ConnectFour), {
+  loading: () => <Skeleton className="w-full h-96" />,
+});
+const RockPaperScissors = dynamic(() => import('@/components/RockPaperScissors').then(mod => mod.RockPaperScissors), {
+  loading: () => <Skeleton className="w-full h-96" />,
+});
+const MemoryMatch = dynamic(() => import('@/components/MemoryMatch').then(mod => mod.MemoryMatch), {
+  loading: () => <Skeleton className="w-full h-96" />,
+});
 
 
 interface Message {
@@ -164,7 +176,7 @@ function ChatSkeleton() {
 }
 
 
-function ChatPage() {
+export default function ChatPage() {
   const { isMobile, setOpenMobile } = useSidebar();
   const [currentUser, setCurrentUser] = useState<UserData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -239,24 +251,22 @@ function ChatPage() {
     }
   }, []);
   
-  const generateUniqueCode = useCallback(async (type: 'contact' | 'login') => {
+  const generateUniqueCode = useCallback(async (generator: () => string, field: 'contactCode' | 'loginCode') => {
     let isUnique = false;
     let newCode = '';
     let attempts = 0;
     const maxAttempts = 10;
     while (!isUnique && attempts < maxAttempts) {
       attempts++;
-      const { code } = type === 'contact' ? await generateContactCode() : await generateLoginCode();
-      const field = type === 'contact' ? "contactCode" : "loginCode";
-      const q = query(collection(db, "users"), where(field, "==", code));
+      newCode = generator();
+      const q = query(collection(db, "users"), where(field, "==", newCode));
       const querySnapshot = await getDocs(q);
       if (querySnapshot.empty) {
         isUnique = true;
-        newCode = code;
       }
     }
     if (!isUnique) {
-      throw new Error(`Failed to generate a unique ${type} code after several attempts.`);
+      throw new Error(`Failed to generate a unique ${field} after several attempts.`);
     }
     return newCode;
   }, []);
@@ -277,8 +287,8 @@ function ChatPage() {
     } else {
         try {
             const [newContactCode, newLoginCode] = await Promise.all([
-                generateUniqueCode('contact'),
-                generateUniqueCode('login')
+                generateUniqueCode(generateSimpleContactCode, 'contactCode'),
+                generateUniqueCode(generateSimpleLoginCode, 'loginCode')
             ]);
             
             const newUser: UserData = {
@@ -592,7 +602,7 @@ function ChatPage() {
   const performCodeRegeneration = useCallback(async () => {
       if (!currentUser) return;
        try {
-        const newCode = await generateUniqueCode('login');
+        const { code: newCode } = await generateLoginCode();
         const userDocRef = doc(db, 'users', currentUser.id);
         await updateDoc(userDocRef, { loginCode: newCode });
         setCurrentUser(prev => prev ? {...prev, loginCode: newCode} : null);
@@ -610,7 +620,7 @@ function ChatPage() {
       } finally {
         setRegenerateConfirmOpen(false);
       }
-  }, [currentUser, toast, generateUniqueCode]);
+  }, [currentUser, toast]);
 
   // Regeneration Timer effect
   useEffect(() => {
@@ -838,7 +848,7 @@ function ChatPage() {
   const handleGenerateContactCode = async () => {
     if (!currentUser) return;
     try {
-      const newCode = await generateUniqueCode('contact');
+      const { code: newCode } = await generateContactCode();
       const userDocRef = doc(db, 'users', currentUser.id);
       await updateDoc(userDocRef, { contactCode: newCode });
       setCurrentUser(prev => prev ? {...prev, contactCode: newCode} : null);
@@ -2065,12 +2075,4 @@ function ChatPage() {
       <audio ref={remoteAudioRef} autoPlay playsInline />
     </div>
   );
-}
-
-export default function Home() {
-    return (
-        <SidebarProvider>
-            <ChatPage />
-        </SidebarProvider>
-    );
 }
