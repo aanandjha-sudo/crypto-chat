@@ -42,6 +42,7 @@ import { TicTacToe } from '@/components/TicTacToe';
 import { ConnectFour } from '@/components/ConnectFour';
 import { Checkers } from '@/components/Checkers';
 import { RockPaperScissors } from '@/components/RockPaperScissors';
+import { MemoryMatch } from '@/components/MemoryMatch';
 
 
 interface Message {
@@ -93,7 +94,7 @@ type CallState = {
 }
 
 type ActiveView = 'chats' | 'contacts' | 'profile' | 'games';
-type ActiveGame = 'tictactoe' | 'connectfour' | 'checkers' | 'rockpaperscissors' | null;
+type ActiveGame = 'tictactoe' | 'connectfour' | 'checkers' | 'rockpaperscissors' | 'memorymatch' | null;
 
 function ChatSkeleton() {
     return (
@@ -1474,6 +1475,7 @@ export default function ChatPage() {
     connectfour: ConnectFour,
     checkers: Checkers,
     rockpaperscissors: RockPaperScissors,
+    memorymatch: MemoryMatch,
   };
 
   const renderGamesView = () => {
@@ -1526,6 +1528,12 @@ export default function ChatPage() {
                         <CardHeader>
                             <CardTitle>Rock, Paper, Scissors</CardTitle>
                             <CardDescription>First to win 3 rounds is the winner!</CardDescription>
+                        </CardHeader>
+                    </Card>
+                    <Card className="cursor-pointer hover:bg-muted" onClick={() => setActiveGame('memorymatch')}>
+                        <CardHeader>
+                            <CardTitle>Memory Match</CardTitle>
+                            <CardDescription>Work together to find all the matching pairs.</CardDescription>
                         </CardHeader>
                     </Card>
                      <Card>
