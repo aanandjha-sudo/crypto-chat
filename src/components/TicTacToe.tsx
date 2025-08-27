@@ -35,7 +35,7 @@ interface TicTacToeProps {
 
 export function TicTacToe({ conversationId, currentUser }: TicTacToeProps) {
     const [gameState, setGameState] = useState<GameState | null>(null);
-    const gameDocRef = doc(db, 'games', conversationId);
+    const gameDocRef = doc(db, 'games-tictactoe', conversationId);
     const { toast } = useToast();
 
     useEffect(() => {
@@ -48,24 +48,26 @@ export function TicTacToe({ conversationId, currentUser }: TicTacToeProps) {
                     const members = conversationDoc.data().members as string[];
                     if (members.length === 2) {
                         const sortedMembers = [...members].sort();
-                        const newGameState: GameState = {
-                            board: Array(9).fill(null),
-                            nextPlayer: 'X',
-                            winner: null,
-                            players: {
-                                X: sortedMembers[0],
-                                O: sortedMembers[1]
-                            },
-                            scores: { X: 0, O: 0 }
-                        };
-                        await setDoc(gameDocRef, newGameState);
-                        setGameState(newGameState);
+                        // Prevent race condition by having only one client initialize the game
+                        if (currentUser.id === sortedMembers[0]) {
+                            const newGameState: GameState = {
+                                board: Array(9).fill(null),
+                                nextPlayer: 'X',
+                                winner: null,
+                                players: {
+                                    X: sortedMembers[0],
+                                    O: sortedMembers[1]
+                                },
+                                scores: { X: 0, O: 0 }
+                            };
+                            await setDoc(gameDocRef, newGameState);
+                        }
                     }
                 }
             }
         });
         return () => unsubscribe();
-    }, [gameDocRef, conversationId]);
+    }, [gameDocRef, conversationId, currentUser.id]);
     
     const calculateWinner = (board: Board): PlayerSymbol | null => {
         const lines = [
@@ -170,7 +172,7 @@ export function TicTacToe({ conversationId, currentUser }: TicTacToeProps) {
     }
     
     const mySymbol = (Object.keys(gameState.players) as PlayerSymbol[]).find(key => gameState.players[key] === currentUser.id);
-    const opponentSymbol = mySymbol === 'X' ? 'O' : 'X';
+    const opponentSymbol = mySymbol ? (mySymbol === 'X' ? 'O' : 'X') : undefined;
     const amIPlayer = !!mySymbol;
 
     return (
@@ -194,16 +196,16 @@ export function TicTacToe({ conversationId, currentUser }: TicTacToeProps) {
                             className="w-20 h-20 md:w-24 md:h-24 flex items-center justify-center text-4xl font-bold"
                             disabled={!!cell || !!gameState.winner || !amIPlayer}
                         >
-                            {cell === 'X' && <X className="w-12 h-12" />}
-                            {cell === 'O' && <Circle className="w-12 h-12" />}
+                            {cell === 'X' && <X className="w-12 h-12 text-red-500" />}
+                            {cell === 'O' && <Circle className="w-12 h-12 text-blue-500" />}
                         </Button>
                     ))}
                 </div>
                  <div className="flex items-center gap-4 text-lg">
                     <span>Scores:</span>
-                    <span>You ({amIPlayer ? gameState.scores[mySymbol] : 0})</span>
+                    <span>You ({amIPlayer && mySymbol ? gameState.scores[mySymbol] : 0})</span>
                     <span>-</span>
-                    <span>Opponent ({amIPlayer ? gameState.scores[opponentSymbol] : 0})</span>
+                    <span>Opponent ({amIPlayer && opponentSymbol ? gameState.scores[opponentSymbol] : 0})</span>
                 </div>
                 {gameState.winner && amIPlayer && (
                      <Button onClick={handleResetGame}>

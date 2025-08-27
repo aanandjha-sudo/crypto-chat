@@ -54,21 +54,23 @@ export function ConnectFour({ conversationId, currentUser }: ConnectFourProps) {
                     const members = conversationDoc.data().members as string[];
                     if (members.length === 2) {
                         const sortedMembers = [...members].sort();
-                        const newGameState: GameState = {
-                            board: createEmptyBoard(),
-                            nextPlayer: 'R',
-                            winner: null,
-                            players: { R: sortedMembers[0], Y: sortedMembers[1] },
-                            scores: { R: 0, Y: 0 }
-                        };
-                        await setDoc(gameDocRef, newGameState);
-                        setGameState(newGameState);
+                         if (currentUser.id === sortedMembers[0]) {
+                            const newGameState: GameState = {
+                                board: createEmptyBoard(),
+                                nextPlayer: 'R',
+                                winner: null,
+                                players: { R: sortedMembers[0], Y: sortedMembers[1] },
+                                scores: { R: 0, Y: 0 }
+                            };
+                            await setDoc(gameDocRef, newGameState);
+                            setGameState(newGameState);
+                        }
                     }
                 }
             }
         });
         return () => unsubscribe();
-    }, [gameDocRef, conversationId]);
+    }, [gameDocRef, conversationId, currentUser.id]);
 
     const checkWin = (board: Board): PlayerSymbol | null => {
         // Check horizontal
@@ -200,7 +202,7 @@ export function ConnectFour({ conversationId, currentUser }: ConnectFourProps) {
     }
 
     const mySymbol = (Object.keys(gameState.players) as PlayerSymbol[]).find(key => gameState.players[key] === currentUser.id);
-    const opponentSymbol = mySymbol === 'R' ? 'Y' : 'R';
+    const opponentSymbol = mySymbol ? (mySymbol === 'R' ? 'Y' : 'R') : undefined;
     const amIPlayer = !!mySymbol;
     
     return (
@@ -219,7 +221,7 @@ export function ConnectFour({ conversationId, currentUser }: ConnectFourProps) {
                     <div className="grid gap-1" style={{gridTemplateColumns: `repeat(${COLS}, minmax(0, 1fr))`}}>
                         {gameState.board.map((row, r) => 
                             row.map((cell, c) => (
-                                <div key={`${r}-${c}`} className={cn("w-10 h-10 md:w-12 md:h-12 flex items-center justify-center", { "cursor-pointer": amIPlayer && !gameState.winner })} onClick={() => handleColumnClick(c)}>
+                                <div key={`${r}-${c}`} className={cn("w-10 h-10 md:w-12 md:h-12 flex items-center justify-center", { "cursor-pointer": amIPlayer && !gameState.winner })} onClick={() => amIPlayer && handleColumnClick(c)}>
                                     <div className={cn("w-full h-full rounded-full bg-blue-900 transition-colors", {
                                         "bg-red-500": cell === 'R',
                                         "bg-yellow-400": cell === 'Y',
@@ -231,9 +233,9 @@ export function ConnectFour({ conversationId, currentUser }: ConnectFourProps) {
                 </div>
                  <div className="flex items-center gap-4 text-lg">
                     <span>Scores:</span>
-                    <span className={cn(mySymbol === 'R' && 'text-red-500 font-bold')}>Red ({gameState.scores.R || 0})</span>
+                    <span className={cn(amIPlayer && mySymbol === 'R' && 'text-red-500 font-bold')}>Red ({gameState.scores.R || 0})</span>
                     <span>-</span>
-                    <span className={cn(mySymbol === 'Y' && 'text-yellow-400 font-bold')}>Yellow ({gameState.scores.Y || 0})</span>
+                    <span className={cn(amIPlayer && mySymbol === 'Y' && 'text-yellow-400 font-bold')}>Yellow ({gameState.scores.Y || 0})</span>
                 </div>
                 {gameState.winner && amIPlayer && (
                      <Button onClick={handleResetGame}>

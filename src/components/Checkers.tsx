@@ -67,23 +67,25 @@ export function Checkers({ conversationId, currentUser }: CheckersProps) {
                     const members = conversationDoc.data().members as string[];
                     if (members.length === 2) {
                         const sortedMembers = [...members].sort();
-                        const newGameState: GameState = {
-                            board: createInitialBoard(),
-                            currentPlayer: 'R',
-                            winner: null,
-                            players: { R: sortedMembers[0], B: sortedMembers[1] },
-                            scores: { R: 0, B: 0 },
-                            redPieces: 12,
-                            blackPieces: 12,
-                        };
-                        await setDoc(gameDocRef, newGameState);
-                        setGameState(newGameState);
+                         if (currentUser.id === sortedMembers[0]) {
+                            const newGameState: GameState = {
+                                board: createInitialBoard(),
+                                currentPlayer: 'R',
+                                winner: null,
+                                players: { R: sortedMembers[0], B: sortedMembers[1] },
+                                scores: { R: 0, B: 0 },
+                                redPieces: 12,
+                                blackPieces: 12,
+                            };
+                            await setDoc(gameDocRef, newGameState);
+                            setGameState(newGameState);
+                        }
                     }
                 }
             }
         });
         return () => unsubscribe();
-    }, [gameDocRef, conversationId]);
+    }, [gameDocRef, conversationId, currentUser.id]);
 
     const getPlayerSymbol = (): Player | null => {
         if (!gameState || !currentUser) return null;
@@ -233,8 +235,7 @@ export function Checkers({ conversationId, currentUser }: CheckersProps) {
         
         if (winner) {
             if (winner === 'draw') return "It's a draw!";
-            if (!mySymbol) return `Player ${winner} won!`;
-            const winnerName = winner === mySymbol ? "You" : "Opponent";
+            const winnerName = players[winner] === currentUser.id ? "You" : "Opponent";
             return `${winnerName} won!`;
         }
 

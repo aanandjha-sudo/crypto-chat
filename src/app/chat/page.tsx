@@ -1209,7 +1209,7 @@ export default function ChatPage() {
     }
   }
 
-  if (loading) {
+  if (loading || !currentUser) {
     return <ChatSkeleton />;
   }
   
