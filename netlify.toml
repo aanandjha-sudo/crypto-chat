@@ -1,0 +1,16 @@
+[build]
+  command = "npm run build"
+  publish = ".next"
+
+[functions]
+  directory = ".next/functions"
+
+[images]
+  remote_images = [
+    "https://picsum.photos/.*",
+    "https://placehold.co/.*",
+    "https://firebasestorage.googleapis.com/.*"
+  ]
+
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
