@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { Toaster } from "@/components/ui/toaster";
 import './globals.css';
 import { Inter, Space_Grotesk } from 'next/font/google';
+import { ThemeProvider } from '@/components/ThemeProvider';
 
 const inter = Inter({
   subsets: ['latin'],
@@ -24,10 +25,12 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="dark">
+    <html lang="en" suppressHydrationWarning>
       <body className={`${inter.variable} ${spaceGrotesk.variable} font-body antialiased`}>
-        {children}
-        <Toaster />
+        <ThemeProvider>
+            {children}
+            <Toaster />
+        </ThemeProvider>
       </body>
     </html>
   );

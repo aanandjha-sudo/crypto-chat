@@ -8,7 +8,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Card, CardHeader, CardContent, CardTitle, CardDescription } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { Send, RefreshCw, Users, User, Phone, PhoneOff, Mic, MicOff, Copy, Edit, MessageSquare, Contact, Bell, BellOff, Upload, Coffee, SmilePlus, Trash2, Paperclip, File, Video, Image as ImageIcon, Swords, BrainCircuit, ArrowLeft } from 'lucide-react';
+import { Send, RefreshCw, Users, User, Phone, PhoneOff, Mic, MicOff, Copy, Edit, MessageSquare, Contact, Bell, BellOff, Upload, Coffee, SmilePlus, Trash2, Paperclip, File, Video, Image as ImageIcon, Swords, BrainCircuit, ArrowLeft, Palette } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { triageNotification } from '@/ai/flows/notification-triage';
@@ -44,6 +44,8 @@ import { ConnectFour } from '@/components/ConnectFour';
 import { Checkers } from '@/components/Checkers';
 import { RockPaperScissors } from '@/components/RockPaperScissors';
 import { MemoryMatch } from '@/components/MemoryMatch';
+import { useTheme } from '@/components/ThemeProvider';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
 
 interface Message {
@@ -219,6 +221,7 @@ export default function ChatPage() {
 
 
   const { toast } = useToast();
+  const { theme, setTheme } = useTheme();
 
   // WebRTC states
   const [isCallModalOpen, setCallModalOpen] = useState(false);
@@ -1502,6 +1505,34 @@ export default function ChatPage() {
                                 </Button>
                             </div>
                         </div>
+                    </div>
+                </CardContent>
+            </Card>
+             <Card>
+                <CardHeader>
+                    <CardTitle>Appearance</CardTitle>
+                    <CardDescription>Customize the look and feel of the application.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                    <div className="grid gap-2">
+                        <Label htmlFor="theme">Theme</Label>
+                        <Select value={theme} onValueChange={setTheme}>
+                            <SelectTrigger id="theme">
+                                <SelectValue placeholder="Select theme" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="system">System</SelectItem>
+                                <SelectItem value="light">Light</SelectItem>
+                                <SelectItem value="dark">Dark</SelectItem>
+                                <SelectItem value="love">Love</SelectItem>
+                                <SelectItem value="retro">Retro</SelectItem>
+                                <SelectItem value="ocean">Ocean</SelectItem>
+                                <SelectItem value="forest">Forest</SelectItem>
+                                <SelectItem value="synthwave">Synthwave</SelectItem>
+                                <SelectItem value="sunshine">Sunshine</SelectItem>
+                                <SelectItem value="mono">Mono</SelectItem>
+                            </SelectContent>
+                        </Select>
                     </div>
                 </CardContent>
             </Card>
