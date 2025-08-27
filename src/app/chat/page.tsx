@@ -354,7 +354,7 @@ export default function ChatPage() {
                     avatar: convData.avatar || `https://picsum.photos/seed/${conversationId}/100/100`,
                     members: convData.members,
                     call: convData.call || { active: false, status: 'ended', initiator: '' }
-                } as Conversation;
+                };
             } else { // 'private'
                 const otherUserId = convData.members.find((id: string) => id !== user.id);
                 if (otherUserId) {
@@ -366,7 +366,7 @@ export default function ChatPage() {
                         avatar: contact?.avatar || `https://picsum.photos/seed/${otherUserId}/100/100`,
                         members: convData.members,
                         call: convData.call || { active: false, status: 'ended', initiator: '' }
-                    } as Conversation;
+                    };
                 }
             }
             return null;
