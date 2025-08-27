@@ -102,7 +102,7 @@ export function RockPaperScissors({ conversationId, currentUser }: RockPaperScis
             }
             
             let newScores = {...gameState.scores};
-            if(roundWinner !== 'draw') {
+            if(roundWinner && roundWinner !== 'draw') {
                 newScores[roundWinner]++;
             }
             
@@ -259,4 +259,3 @@ export function RockPaperScissors({ conversationId, currentUser }: RockPaperScis
         </Card>
     );
 }
-
