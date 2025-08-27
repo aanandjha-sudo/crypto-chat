@@ -176,7 +176,7 @@ function ChatSkeleton() {
 }
 
 
-export default function ChatPage() {
+function ChatPage() {
   const { isMobile, setOpenMobile } = useSidebar();
   const [currentUser, setCurrentUser] = useState<UserData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -2075,4 +2075,13 @@ export default function ChatPage() {
       <audio ref={remoteAudioRef} autoPlay playsInline />
     </div>
   );
+}
+
+
+export default function Home() {
+    return (
+        <SidebarProvider>
+            <ChatPage />
+        </SidebarProvider>
+    );
 }
